@@ -1,0 +1,10 @@
+{
+  "name": "pwa-gitmanager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build": "python3 package.py"
+  }
+}
