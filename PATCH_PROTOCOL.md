@@ -41,7 +41,7 @@ All `/_git/v1/*` routes require authorized Google session. Non-GET also requires
 | GET `/admin/status` | Validated session status and expiration |
 | POST `/admin/unlock` | JSON `{password}`; sets 4-hour secure cookie after identity and CSRF checks |
 | POST `/admin/lock` | Clear current cookie after identity and CSRF checks |
-| GET `/jobs/{id}/download` | Authorized completed export: redirect to GitHub short-lived signed artifact URL |
+| GET `/jobs/{id}/download` | Authorized completed export: stream the private Actions artifact ZIP through the authenticated Worker |
 | GET `/repos?page=1` | `{repos:[{name,private,defaultBranch,head,version,tag,production,url}],next}`; pagination |
 | GET `/repos/{repo}/{commits,tags,branches,files,pins,runs,pulls,source}` | `ref`, `path`, `page` as applicable; metadata, base64 file data, or source ZIP |
 | POST `/jobs` | Multipart `upload` (File), `plan` JSON string, `mode` `direct/pr/dry`; returns draft |
@@ -54,7 +54,7 @@ All `/_git/v1/*` routes require authorized Google session. Non-GET also requires
 | POST `/repos/{repo}/workflows/tags` | Dispatch current main's `tag-main.yml` |
 | POST `/repos/AppLauncher/workflows/reconcile` | Dispatch current main's validation workflow |
 
-All paths above are relative to `/_git/v1`. States: draft, running, paused, failed, awaiting-pr, completed, cancelled. `progress` contains phase/note/time; `retryAt` identifies a scheduled automatic observation retry. The durable watchdog observes lost callbacks without redispatching ambiguous writes. `index` counts completed update steps; final settlement can still be running at full count. A failed job retains the global write lock until resumed or explicitly cancelled. A final settlement failure means publication can be complete but automation is pending. Use logs and the records to distinguish this. For an export, unlock and download directly in Activity, or open the linked private Actions run → Artifacts → `prepared-*` → extract `workspace.tar.gz`.
+All paths above are relative to `/_git/v1`. States: draft, running, paused, failed, awaiting-pr, completed, cancelled. `progress` contains phase/note/time; `retryAt` identifies a scheduled automatic observation retry. The durable watchdog observes lost callbacks without redispatching ambiguous writes. `index` counts completed update steps; final settlement can still be running at full count. A failed job retains the global write lock until resumed or explicitly cancelled. A final settlement failure means publication can be complete but automation is pending. Use logs and the records to distinguish this. For an export, unlock and use Share workspace archive in Activity. The client validates and unwraps only the `workspace.tar.gz` member, then opens native sharing. The original private Actions artifact remains available through the separate Actions artifacts action if needed.
 
 ## Private runner interface
 
