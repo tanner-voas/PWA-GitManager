@@ -46,7 +46,7 @@ export default {async fetch(req,env){try{const url=new URL(req.url),p=url.pathna
    const href=r.headers.get('Location');let destination;try{destination=new URL(href);}catch{return fail('Artifact download unavailable',502);}
    // GitHub returns a short-lived signed storage URL. Never forward the installation token.
    if(![301,302,303,307,308].includes(r.status)||destination.protocol!=='https:'||destination.username||destination.password)return fail('Artifact redirect refused',502);
-   return new Response(null,{status:302,headers:{Location:destination.href,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
+   const archive=await fetch(destination.href,{redirect:'manual'});if(!archive.ok)return fail('Export artifact unavailable or expired',502);return new Response(archive.body,{headers:{'Content-Type':'application/zip','Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
   }
   if(path==='/jobs')return await internal(env,'/jobs');if(/^\/jobs\/[0-9a-f-]{36}$/.test(path))return await internal(env,path);if(path==='/repos'||path.startsWith('/repos/'))return await repositoryView(req,env,url,path);return fail('Unknown API route',404);
  }
@@ -55,7 +55,7 @@ export default {async fetch(req,env){try{const url=new URL(req.url),p=url.pathna
   const [, ,name,,action]=path.split('/');const rt=await readToken(env);if(!(await installed(env,rt)).some(r=>r.name===name))return fail('Repository not installed',404);if(action==='reconcile'&&name!=='AppLauncher')return fail('Only AppLauncher has the central reconciliation workflow');const t=await token(env,{actions:'write',metadata:'read'},[name]);const workflow=action==='tags'?'tag-main.yml':'validate-production.yml';await gh(t,repoRoute(env,name)+'/actions/workflows/'+workflow+'/dispatches',{method:'POST',body:{ref:'main'}});return json({accepted:true});
  }
  if(req.method==='POST'&&path==='/exports'){
-  const spec=await req.json(),t=await readToken(env),repos=await installed(env,t),names=[...new Set(spec.repositories||[])];if(!names.length||names.length>16||names.some(n=>!repos.some(r=>r.name===n))||!['lightweight','recursive','bundle'].includes(spec.format))return fail('Invalid export request');const id=crypto.randomUUID();const draft=await internal(env,'/jobs','POST',{id,mode:'export',plan:{schema:1,title:'Repository export',updates:[]},exportSpec:{repositories:names,format:spec.format}});if(!draft.ok||spec.start!==true)return draft;return await internal(env,'/jobs/'+id+'/start','POST',{});
+  const spec=await req.json(),t=await readToken(env),repos=await installed(env,t),names=[...new Set(spec.repositories||[])];if(!names.length||names.length>16||names.some(n=>!repos.some(r=>r.name===n))||!['lightweight','recursive','bundle'].includes(spec.format))return fail('Invalid export request');const id=crypto.randomUUID();return await internal(env,'/jobs','POST',{id,mode:'export',plan:{schema:1,title:'Repository export',updates:[]},exportSpec:{repositories:names,format:spec.format},start:spec.start===true});
  }
  if(req.method==='POST'&&path==='/jobs'){
   const n=Number(req.headers.get('Content-Length')||0);if(n>MAX_UPLOAD+128*1024)return fail('Upload exceeds 12 MiB',413);const form=await req.formData(),file=form.get('upload');if(!file||typeof file.arrayBuffer!=='function'||file.size>MAX_UPLOAD)return fail('Upload missing or exceeds 12 MiB',413);const t=await readToken(env),repos=await installed(env,t);const mode=String(form.get('mode'));if(!['direct','pr','dry'].includes(mode))return fail('Invalid publish mode');const plan=normalizePlan(JSON.parse(String(form.get('plan'))),repos.map(r=>r.name));if(mode==='dry'&&plan.updates.some(u=>u.dependsOn.length))return fail('Dry runs with unpublished inter-repository pins are not supported; use single-repository dry runs');const id=crypto.randomUUID(),bytes=await file.arrayBuffer(),sha256=await digest(bytes);await env.PACKAGES.put(id+'/upload',bytes);const r=await internal(env,'/jobs','POST',{id,plan,mode,sha256,filename:String(file.name||'upload').slice(0,200)});if(!r.ok)await env.PACKAGES.delete(id+'/upload');return r;
@@ -90,17 +90,23 @@ export class JobCoordinator {
   j.status='paused';j.error='Runner completed without a final callback ('+(run.conclusion||'unknown')+'); recover to verify any publication before retrying.';await this.save(j);
  }
  async begin(j,kind=j.mode==='export'?'export':'update'){
-  const active=await this.s.get('active');if(active&&active!==j.id)throw Error('Another workspace job is active');await this.s.put('active',j.id);
+  const active=await this.s.get('active');if(active&&active!==j.id){const previous=await this.get(active);if(['completed','cancelled'].includes(previous.status)){await this.release(previous);}else throw Error('Another workspace job is active. Open Activity to finish or cancel it.');}await this.s.put('active',j.id);
   if(j.attempt){j.attemptHistory=[...(j.attemptHistory||[]),j.attempt].slice(-64);}j.attempt={id:crypto.randomUUID(),kind,createdAt:Date.now(),runId:null,candidate:null,writeIssued:false};j.status='running';j.error=null;j.retryAt=null;j.progress={phase:'dispatch',note:'Starting remote runner'};await this.save(j);await this.watch();
   try{await this.dispatch(j.id,j.attempt.id);}catch(e){j.status='paused';j.error='Dispatch not confirmed; inspect workflow before retrying: '+e.message;await this.save(j);}
   return j;
  }
+ async history(){
+  const rows=[];let startAfter;for(;;){const page=await this.s.list({prefix:'job:',limit:256,...(startAfter?{startAfter}:{})});if(!page.size)break;rows.push(...page.values());const last=[...page.keys()].at(-1);if(page.size<256||last===startAfter)break;startAfter=last;}
+  const active=await this.s.get('active'),now=Date.now(),day=86400000;let terminal=0;const kept=[];
+  for(const j of rows.sort((a,b)=>b.createdAt.localeCompare(a.createdAt))){const age=now-Date.parse(j.updatedAt||j.createdAt);const finished=['completed','cancelled'].includes(j.status);if(finished)terminal++;const expired=j.id!==active&&((finished&&(age>30*day||terminal>100))||(j.status==='draft'&&age>7*day));if(expired){await this.s.delete('job:'+j.id);if(this.env.PACKAGES)await this.env.PACKAGES.delete(j.id+'/upload');}else kept.push(j);}
+  return kept;
+ }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
-  if(path==='/jobs'&&method==='GET'){const rows=await this.s.list({prefix:'job:',reverse:true,limit:1000});return json([...rows.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,100));}
-  if(path==='/jobs'&&method==='POST'){const data=await req.json();const j={...data,controller:this.env.CONTROLLER_REPO,status:'draft',index:0,records:[],retries:0,createdAt:new Date().toISOString()};await this.save(j);return json(j,201);}
+  if(path==='/jobs'&&method==='GET'){return json(await this.history());}
+  if(path==='/jobs'&&method==='POST'){const {start,...data}=await req.json();const j={...data,controller:this.env.CONTROLLER_REPO,status:'draft',index:0,records:[],retries:0,createdAt:new Date().toISOString()};if(start===true&&j.mode==='export')return json(await this.begin(j),201);await this.save(j);return json(j,201);}
   let m=/^\/jobs\/([0-9a-f-]{36})(?:\/(start|resume|cancel))?$/.exec(path);if(m){const j=await this.get(m[1]);if(method==='GET'&&!m[2])return json(j);if(method!=='POST')return fail('Method not allowed',405);
    if(m[2]==='start'){if(j.status!=='draft')throw Error('Only draft jobs may be started');return json(await this.begin(j));}
-   if(m[2]==='cancel'){if(!['draft','failed','paused','awaiting-pr'].includes(j.status))throw Error('Cannot cancel an active or completed job');if(j.attempt?.writeIssued&&!j.records.some(r=>r.index===j.index))throw Error('Publication is uncertain; recover before cancelling');j.status='cancelled';await this.save(j);await this.release(j);return json(j);}
+   if(m[2]==='cancel'){if(!['draft','failed','paused','awaiting-pr','running'].includes(j.status))throw Error('Cannot cancel a completed job');if(j.status==='running'&&j.attempt?.writeIssued)throw Error('Publication credentials were issued. Wait for the runner to finish, then recover if necessary.');if(j.attempt?.writeIssued&&!j.records.some(r=>r.index===j.index))throw Error('Publication is uncertain; recover before cancelling');j.status='cancelled';j.retryAt=null;await this.save(j);await this.release(j);return json(j);}
    if(m[2]==='resume')return json(await this.resume(j));
   }
   m=/^\/runner\/([0-9a-f-]{36})\/([0-9a-f-]{36})\/(claim|package|token|candidate|published|progress|finish)$/.exec(path);if(!m)return fail('Unknown job operation',404);const j=await this.get(m[1]),a=j.attempt,op=m[3];if(!a||a.id!==m[2]||j.status!=='running'||await this.s.get('active')!==j.id)return fail('Stale or inactive attempt',409);const data=method==='POST'?await req.json():{},runId=String(data.runId||req.headers.get('X-Run-ID')||'');

@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {shareFile} from '../src/share-files.js';
+test('native share receives file without any download or navigation',async()=>{let args;const file={name:'sample.json'};const env={navigator:{canShare:()=>true,userActivation:{isActive:true},share:async x=>{args=x;}}};assert.equal(await shareFile(file,{env}),'shared');assert.deepEqual(args.files,[file]);});
+test('unsupported share rejects rather than downloading',async()=>{await assert.rejects(shareFile({name:'sample.json'},{env:{navigator:{}}}),/unavailable/);});
+test('share cancellation is not treated as success',async()=>{await assert.rejects(shareFile({name:'sample.json'},{env:{navigator:{canShare:()=>true,userActivation:{isActive:true},share:async()=>{throw new DOMException('Cancelled','AbortError');}}}}),{name:'AbortError'});});
+test('async preparation presents a new user gesture instead of navigating',async()=>{
+ const nodes=[];const doc={createElement(tag){const n={tag,style:{},children:[],setAttribute(){},append(...items){this.children.push(...items);},addEventListener(){},remove(){this.removed=true;},showModal(){this.open=true;}};nodes.push(n);return n;},body:{append(){}}};let calls=0;const f={name:'prepared.zip'};
+ const pending=shareFile(f,{env:{document:doc,navigator:{canShare:()=>true,userActivation:{isActive:false},share:async a=>{calls++;assert.deepEqual(a.files,[f]);}}}});assert.equal(calls,0);const button=nodes.find(x=>x.textContent==='Share file');assert.ok(button);await button.onclick();assert.equal(await pending,'shared');assert.equal(calls,1);assert.ok(nodes[0].removed);
+});

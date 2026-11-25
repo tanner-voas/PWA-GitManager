@@ -1,4 +1,4 @@
-# PWA-GitManager v0.1.3
+# PWA-GitManager v0.1.4
 
 A mobile-first GitHub workspace manager for AppLauncher and a standalone recovery URL. GitHub is the source of truth; the iPhone never needs a local Git clone. The implementation is split into this repository (browser app + Cloudflare API) and **PWA-GitRunner**, a separate **private** repository that runs trusted GitHub Actions jobs. Install the same private GitHub App on all repositories you want to manage, including both of these. New installations/repositories are discovered from the installation API, not AppLauncher's application list.
 
@@ -32,3 +32,6 @@ Every push to `main` triggers `.github/workflows/notify-app-launcher.yml`, which
 * `SECURITY.md`: trust boundary, recovery, limits and operational precautions.
 
 Build: `python3 package.py` (emits `dist/gitmanager` and `dist/standalone`). Test: `npm test`. No npm install is required. Runner tests: `python3 -m unittest discover -s tests` in PWA-GitRunner. The initial implementation is local-test validated, not yet live-deployment validated. Perform a dry run before first publication. General branch deletion/creation, repository creation, graphical conflict resolution, large-file multipart uploads, and in-app PR merge are not implemented. Repositories without canonical versions can be browsed/exported but cannot be mutated until versioning is established. Unknown test policies fail closed unless a valid npm test script exists. Submodule execution currently supports same-owner HTTPS GitHub repositories only. The manager never claims to validate a repository with no test policy; Chronicle's explicit policy is only a whitespace/diff check, since it has no application code yet.
+
+## v0.1.4
+Header controls follow the workspace convention. File exports use native file sharing, including an explicit second tap after asynchronous preparation. No download navigation fallback. History shows ten jobs initially; completed/cancelled jobs are retained for up to 30 days (100 newest), inactive drafts for seven days. Active or unresolved publication records are retained. A running attempt can be cancelled before write credentials are issued; uncertain writes must be recovered. Existing export artifact lifetime remains one day.
