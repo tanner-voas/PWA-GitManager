@@ -39,7 +39,7 @@ All `/_git/v1/*` routes require authorized Google session. Non-GET also requires
 | Method/path | Request/response |
 |---|---|
 | GET `/admin/status` | Validated session status and expiration |
-| POST `/admin/unlock` | JSON `{password}`; sets 30-minute secure cookie after identity and CSRF checks |
+| POST `/admin/unlock` | JSON `{password}`; sets 4-hour secure cookie after identity and CSRF checks |
 | POST `/admin/lock` | Clear current cookie after identity and CSRF checks |
 | GET `/jobs/{id}/download` | Authorized completed export: redirect to GitHub short-lived signed artifact URL |
 | GET `/repos?page=1` | `{repos:[{name,private,defaultBranch,head,version,tag,production,url}],next}`; pagination |

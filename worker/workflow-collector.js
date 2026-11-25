@@ -1,5 +1,5 @@
 import {createEvent,DAY} from './telemetry-schema.js';
-import {workflowEvent,repoEvents} from './telemetry.js';
+import {workflowEvent,repoEvents,enrollmentIdentity} from './telemetry.js';
 import {gh,readToken,repoRoute} from './github.js';
 // Independent read-only DO. At most one repo list and one completed-run detail
 // per tick; no Actions dispatch, no publication lock, no raw provider payloads.
@@ -12,7 +12,7 @@ const retryDelay=(e,n)=>Math.max(Math.min(6*60*60000,TICK*2**Math.min(n,6)),Numb
 const numericId=v=>/^\d{1,20}$/.test(String(v??''));
 const outcome=x=>({success:'success',failure:'failed',cancelled:'cancelled',timed_out:'failed',skipped:'skipped',neutral:'completed',action_required:'failed',stale:'failed'}[x]||'unknown');
 const hex=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),b=>b.toString(16).padStart(2,'0')).join('');
-const stableId=async s=>{const h=await hex(s);return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`;};
+export const stableId=async s=>{const h=await hex(s);return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`;};
 const duration=(a,b)=>{a=Date.parse(a);b=Date.parse(b);return Number.isFinite(a)&&Number.isFinite(b)&&b>=a?b-a:undefined;};
 const time=(v,now)=>{const n=Date.parse(v);return Number.isFinite(n)&&n>=now-30*DAY&&n<=now+300000?iso(n):iso(now);};
 const key=r=>`${r.repo}:${r.id}:${r.attempt}`;
@@ -34,7 +34,7 @@ export class WorkflowCollector{
  async state(){return {...fresh(),...await this.s.get(KEY)};}
  async status(){const s=await this.state();const {authorityHash,repos,pending,seen,runsSeen,...publicState}=s;return {...publicState,repositoryCount:repos.length,pendingDetails:pending.length,nextPoll:await this.s.getAlarm?.()??null,nextManual:s.lastManual?s.lastManual+MANUAL:null};}
  async arm(delay,now=Date.now()){await this.s.setAlarm(now+delay);}
- async ensure({manual=false,reset=false,now=Date.now()}={}){let s=await this.state();if(reset){s=fresh();s.enabled=true;await this.s.deleteAlarm?.();}else if(!s.enabled&&s.lastError!=='authorization-revoked')s.enabled=true;
+ async ensure({manual=false,reset=false,repair=false,now=Date.now()}={}){let s=await this.state();if(reset){s=fresh();s.enabled=true;await this.s.deleteAlarm?.();}else if(!s.enabled&&(repair||s.lastError!=='authorization-revoked')){s.enabled=true;if(repair){s.lastError=null;s.failures=0;s.retryAt=null;}}
   if(!s.enabled)return this.status();const old=await this.s.getAlarm?.();if(manual&&(!s.lastManual||now-s.lastManual>=MANUAL)&&!s.failures){s.lastManual=now;await this.arm(1000,now);}else if(old==null)await this.arm(Math.max(INITIAL,(s.retryAt||0)-now),now);await this.s.put(KEY,s);return this.status();}
  async scanNow(now=Date.now()){
   await this.ensure({now});const s=await this.state();
@@ -49,7 +49,7 @@ export class WorkflowCollector{
   try{
    s.lastTick=now;s.lastStage='authority';s.lastStatus=null;await this.s.put(KEY,s);
    const cap=await this.io.authority();if(!cap){s.enabled=false;s.lastError='authorization-revoked';await this.s.put(KEY,s);await this.s.deleteAlarm?.();return this.status();}
-   const hash=await hex(cap);const changed=hash!==s.authorityHash;if(changed){s={...fresh(),enabled:true,authorityHash:hash,lastManual:s.lastManual};}
+   const hash=await hex(enrollmentIdentity(cap)||cap);const changed=hash!==s.authorityHash&&await hex(cap)!==s.authorityHash;if(!changed)s.authorityHash=hash;if(changed){s={...fresh(),enabled:true,authorityHash:hash,lastManual:s.lastManual};}
    s.lastTick=now;s.lastStage='queue';await this.s.put(KEY,s);const q=await this.io.queueStatus();if(!changed&&q.lastError==='authorization-revoked'&&!q.configured){s.enabled=false;s.lastError='authorization-revoked';await this.s.put(KEY,s);await this.s.deleteAlarm?.();return this.status();}
    // Reserve room for the poller's bounded batch and for live job events.
    if(q.pending>32||(q.pending>0&&q.failures>0)){s.backpressure++;s.lastStage='backpressure';await this.s.put(KEY,s);await this.arm(delay,now);return this.status();}

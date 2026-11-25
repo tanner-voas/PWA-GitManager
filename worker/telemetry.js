@@ -4,6 +4,10 @@ import {createEvent,sanitizeEvent,DAY} from './telemetry-schema.js';
 const KEY='telemetry:outbox', LIMIT=96, BATCH=32, FIRST=60000, TTL=2*DAY;
 const empty=()=>({capability:null,queue:[],observations:{},sent:0,dropped:0,failures:0,lastError:null,lastSent:null,lastManual:0});
 const stamp=n=>new Date(n).toISOString();
+// For queue continuity only: both inputs originate from trusted server RPC/storage.
+// The Profiles service still verifies the signed capability on every append.
+export function enrollmentIdentity(cap){try{const [body,signature,...rest]=cap.split('.');if(rest.length||!signature)return null;const x=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(body.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))));if(x.type==='workspace-telemetry'&&/^\d+$/.test(x.sub)&&/^[a-f0-9-]{36}$/i.test(x.generation)&&(x.epoch==null||/^[a-f0-9-]{36}$/i.test(x.epoch)))return JSON.stringify([x.sub,x.generation,x.epoch??null]);}catch{}return null;}
+export function sameEnrollment(a,b){if(!a||!b)return false;if(a===b)return true;const i=enrollmentIdentity(a);return !!i&&i===enrollmentIdentity(b);}
 const phaseOp={preparing:'prepare',validating:'validate',publishing:'publish',settling:'settle'};
 const terminal=new Set(['completed','cancelled','failed','paused']);
 const jobCorrelation=(j,a=j.attempt)=>({jobId:j.id,attemptId:a?.id,workflowRunId:a?.runId,repo:a?.kind==='update'?j.plan?.updates?.[j.index]?.repository:undefined,commit:a?.candidate?.commit});
@@ -45,10 +49,10 @@ export class TelemetryOutbox{
  async state(){return {...empty(),...await this.s.get(KEY)};}
  async status(){const m=await this.state();return {configured:!!m.capability,pending:m.queue.length,sent:m.sent,dropped:m.dropped,failures:m.failures,lastError:m.lastError,lastSent:m.lastSent,alarmAt:await this.s.getAlarm?.()??null};}
  async arm(m,delay=FIRST){if(!m.capability||!m.queue.length)return;const at=Date.now()+delay,old=await this.s.getAlarm?.();if(old==null||old>at)await this.s.setAlarm(at);}
- async clear(capability){const m=await this.state();if(capability!==m.capability)return;await this.s.put(KEY,{...empty(),sent:m.sent,dropped:m.dropped+m.queue.length});await this.s.deleteAlarm?.();}
+ async clear(capability){const m=await this.state();if(!sameEnrollment(capability,m.capability))return;await this.s.put(KEY,{...empty(),sent:m.sent,dropped:m.dropped+m.queue.length});await this.s.deleteAlarm?.();}
  async enqueue(capability,items,now=Date.now()){
   if(typeof capability!=='string'||!capability||capability.length>4096||!Array.isArray(items)||items.length>64)return;
-  let m=await this.state();if(m.capability!==capability){m={...empty(),capability,sent:m.sent,dropped:m.dropped+m.queue.length};}
+  let m=await this.state();if(m.capability!==capability){if(sameEnrollment(m.capability,capability)){m.capability=capability;m.failures=0;m.lastError=null;}else m={...empty(),capability,sent:m.sent,dropped:m.dropped+m.queue.length};}
   for(const item of items){const event=sanitizeEvent(item.event||item,{now});if(!event){m.dropped++;continue;}const key=typeof item.key==='string'&&/^(repo|run):[A-Za-z0-9_.:-]{1,180}$/.test(item.key)?item.key:null,fp=fingerprint(event);if(key&&m.observations[key]?.fp===fp&&now-m.observations[key].at<(key.startsWith('run:')?30*DAY:DAY))continue;
    if(m.queue.some(x=>x.eventId===event.eventId))continue;
    if(m.queue.length>=LIMIT){const victim=m.queue.findIndex(x=>!priority(x));if(victim<0||!priority(event)){m.dropped++;continue;}m.queue.splice(victim,1);m.dropped++;}

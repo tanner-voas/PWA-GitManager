@@ -1,5 +1,5 @@
 import {constantEqual} from './protocol.js';
-const enc=new TextEncoder(),name='pwa_git_admin',seconds=1800;
+const enc=new TextEncoder(),name='pwa_git_admin',seconds=4*60*60;
 const b64=a=>btoa(String.fromCharCode(...new Uint8Array(a))).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
 const validEnv=e=>String(e.ADMIN_UNLOCK||'').length>=24&&String(e.RUNNER_SECRET||'').length>=32;
 async function signature(env,origin,payload){const key=await crypto.subtle.importKey('raw',enc.encode(JSON.stringify([env.ADMIN_UNLOCK,env.RUNNER_SECRET])),{name:'HMAC',hash:'SHA-256'},false,['sign']);return b64(await crypto.subtle.sign('HMAC',key,enc.encode(JSON.stringify([origin,String(env.ADMIN_EMAIL||'').toLowerCase(),payload]))));}
