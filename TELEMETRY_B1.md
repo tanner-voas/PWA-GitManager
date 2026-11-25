@@ -1,0 +1,24 @@
+# GitManager telemetry B1 (0.1.7)
+
+A2 already writes valid schema-2 chunks to Google Drive. B1 adds structured manager, runner-callback, repository and observed Actions metadata without changing the runner, Profiles worker, credentials, or GitHub permissions. `worker/telemetry-schema.js` is a byte-identical vendored PWA-Core 0.1.4 event contract; keep it aligned with the Profiles sink.
+
+## Capture and meaning
+
+- `git-manager` events describe persisted job transitions, including candidate preparation, write authorization observation (never credentials), actual recorded publication, retry, cancellation and terminal status. `git-runner` records observations of already authenticated callbacks, not native runner logs. A prepare/candidate event is not a passed validation. A pending publish event is not a confirmed GitHub write. Terminal count/limit refer to the job's observed completed/total updates or export repositories. Publication `appVersion` denotes the target repository's reported version, not the manager version. No plan titles, filenames, notes, log output, URLs, credentials or raw request bodies are included.
+- `repository` snapshots are obtained from normal repo-list reads. `snapshot` records main SHA and reported source version; `tag` records a directly matched revision tag's target SHA/version; `production` records AppLauncher production SHA if available. They are not deployment verification. Unavailable head or production SHA is unknown. No annotated tag or nested gitlink enumeration yet.
+- `github-actions/workflow` records observed run ID, attempt (when present), SHA, outcome, timestamps and approximate workflow elapsed duration when timestamps are available. It is not a runner-minute or billing measurement. Only existing Runs, watchdog and recovery reads are captured; no periodic GitHub discovery or raw logs. Repeated unchanged observations are deduplicated within a bounded cache; events are snapshots, not additive usage.
+
+## Queue and authority
+
+A second instance of the existing JOBS DO is used for an independent persistent queue and alarm. No migration or binding change. The stored A2 enrollment capability is reused, never returned to the public client. Revoked/invalid capabilities are rejected by Profiles. The producer queue holds at most 96 events, sends 32 at a time, retries boundedly with backoff, expires pending data after 48 hours, and exposes pending/forwarded/dropped/failure counts. Acknowledgement means the sink accepted or deduplicated every event in the batch, not a verified Drive write. Manual flush forwards one batch then asks Profiles to flush one archive batch. If sink capacity is exhausted, a partially accepted batch remains pending and retry dedup applies. The sink may count repeated rejected attempts; these counters are not an exact count of unique lost records. Queue and observation-cache overflow can lose records; state persists across normal deploys, but deferred enqueue is not atomic with job saving. There is no promise of complete telemetry or guaranteed no-loss capture. Telemetry cannot start, approve, cancel or publish a job.
+
+## Live acceptance
+
+1. Apply the B1 manifest, wait for GitManager 0.1.7 in AppLauncher. Verify existing A2 archive remains enabled. Do not disable it.
+2. Refresh Repos; open a repository's Runs view (e.g. PWA-GitRunner). Return to Repos. Wait for producer queue or check settings.
+3. Start a lightweight export of iSH-Scripts and allow it to complete. This tests job transitions without modifying repository contents.
+4. In Settings, unlock if necessary and press Upload pending now. This forwards up to 32 pending records and attempts one Drive batch. Respect the existing one-minute manual cooldown; repeat if pending remains. The producer alarm can also forward automatically without the PWA open; the normal Drive batching interval still applies.
+5. Check status (queue pending, forwarded, failures and verified Drive receipt) and share the new Drive chunks. Expect `repository`, `github-actions`, `git-manager`, `git-runner` records, plus any regular `google-drive` events. Source records can span multiple files. Compare known SHAs and job IDs. Repeated identical Repos refreshes should not repeatedly create the same observations within a day. Existing runs may be deduplicated; older-than-retention runs are skipped. Workflow metadata can arrive after job events or require opening Runs explicitly in this phase.
+6. Optional: cancel a draft; verify terminal cancellation events without publication. Test error isolation in local tests rather than intentionally breaking a live deployment.
+
+See WORKSPACE_ROADMAP.md for the locked full plan and unimplemented coverage. No range export, per-activity telemetry share, independent GitHub discovery, native Cloudflare, R2, translation or speech collectors yet.
