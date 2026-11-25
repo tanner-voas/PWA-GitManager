@@ -1,6 +1,96 @@
-# Workspace roadmap — R2 (2026-11-25)
+# Workspace roadmap R3
 
-Status: R2 approved by user on 2026-11-25; A1/A2/B1/B2/B2.1 and UI-01 published; B2.1 and UI-01 live acceptance pending; combined v0.1.11 UI and telemetry update prepared (supersedes UI-only candidate). Latest detailed status is in the implementation ledger below. Scope and acceptance criteria below remain locked. NEXT-01 is P0; all prior items remain intact. No remote changes made by assistant; publication and live validation pending.
+25 November 2026 · Recovery release and telemetry acceptance
+
+**Current release decision.** Replace the failed five-repository package with a new GitManager job. The first job prepared the Cíyán candidate and then failed validation. It published zero commits. The five source versions below are the shipping baseline at audit time. The right-hand column identifies the replacement candidates.
+
+| Repository | Exported main | Source version | Replacement |
+|---|---|---|---|
+| Ciyan | `034e5b64ffc8` | 0.9.23 | 0.9.24 |
+| WorldGen | `39cef85a86bb` | 0.2.12 | 0.2.13 |
+| Ascendant | `8787ec791ef7` | 0.1.21 | 0.1.22 |
+| PWA-GoogleDrive | `f63f38a9de84` | 0.1.15 | 0.1.16 |
+| PWA-GitManager | `d07d6cec7206` | 0.1.12 | 0.1.13 |
+| AppLauncher | `c2c269ecf459` | 0.1.22.r4 tag | Automatic pin reconciliation |
+| PWA-Core | `30867c7bce86` | 0.1.4 | Existing application-specific pins |
+| PWA-GitRunner | `de14c4dfee44` | 0.1.3 | Existing runner |
+| iSH-Scripts | `8019446121e8` | 0.1.0 | Existing release |
+| Chronicle | `3981515a8222` | 0.0.0 | Reserved |
+
+## Workspace audit
+
+**Git state.** All ten exported checkouts passed full Git object verification. Their clean main branches, tracking refs, tags on HEAD, repository origins and gitlinks agreed with the lightweight export. Every recorded submodule commit exists in the supplied repository histories. Read-only GitHub checks matched nine main refs including all five update bases. GitRunner returned 404 to this account scope. Its baseline comes from the export. AppLauncher main and production matched on GitHub. Cloudflare deployment and the installed iPhone build require separate evidence.
+
+**Validation incident.** Job `b7847218-b608-423b-a893-fa33af0e78ce`, run `45630225001`, prepared tree `70d943e3` and verified two gitlinks. Its 142nd Cíyán test failed at the launcher URL assertion. The original browser fixture lacked the dialog DOM methods used before the first save. The handler caught that exception and stayed on the study page. The original assertion failure reproduced locally. The job recorded index 0, no update records and no write credentials issued. A resume would replay the old upload.
+
+**Correction.** Cíyán's smoke test now exercises the real dialog helper and asserts its final stage and cleanup as well as URL, reload, revision and active practice. The progress dialog falls back to its open state when modal activation fails. File sharing uses only the file in immediate and second-tap paths. GitManager gives each ordinary action in its button groups a full-width row, including failed-job recovery, completed exports and the review footer. Its prepared-file share prompt also stacks both choices. Headers and navigation keep their compact layout. The Drive worker schedules another flush after one second when at least 64 entries remain after verification, keeps its 15-minute batching interval for a partial batch and clears the flush deadline for an empty queue.
+
+**Dependency order.** Keep Cíyán before Drive. Publishing Drive can advance Cíyán main through its automatic pin update. AppLauncher checks that its own Drive pin equals Cíyán's and validates its release before promoting production. An explicit launcher patch would add an unnecessary moving base here. Core is intentionally pinned at different revisions in different apps. The runner's exact-candidate, version, dependency and settlement checks remain the release authority.
+
+**Export evidence.** GitRunner creates one workspace.tar.gz containing WORKSPACE.json plus the requested repositories or bundles. GitManager extracts that member from the Actions artifact ZIP before sharing. The supplied ten-repository file is a lightweight tar.gz. Record the originating action, filename and first extraction result on iPhone to reconcile the earlier report of a multi-repository ZIP. Preserve the working export flow.
+
+**Local release evidence.** The five candidate suites passed all 846 tests (329 Cíyán, 260 WorldGen, 118 Ascendant, 72 Drive and 67 GitManager). Four app packagers and the Drive syntax gate passed. The exported GitRunner validation function checked the archived candidate commit and tree, executed the repository policy, then checked for tracked-file changes. Local Node was 24.22.3; the hosted workflow selects Node 22. The unchanged repositories also passed their existing policy commands, including the launcher strict baseline build and release-race fixture. Actual iPhone sharing, layout, cloud sync and unattended telemetry still require live evidence. Local browser geometry was not verified in this run.
+
+## Execution order and acceptance
+
+The current package implements slices of UI-04, UI-05, UI-08 and TEL-02, with QA-01 verification. Every other permanent ID remains outside its implementation scope. The sequence below is proposed. The detailed R2 acceptance criteria follow in the appendix. Use the current state and ordering here when historical entries refer to earlier versions.
+
+| Order | Work and dependencies | Evidence needed to proceed |
+|---|---|---|
+| 1 · Apply replacement | Cancel remaining work on the failed 0/5 job to release its active-job lock. Upload the replacement ZIP under Updates, review five entries and start the new direct job. | Five published records, successful settlement, automatic Cíyán/Drive and launcher pin reconciliation. Compare the served version tree on iPhone to GitHub production. If interrupted, use the new job's actual records to decide recovery. |
+| 2 · Prove unattended telemetry (P0) | TEL-02, TEL-03, TEL-04, TEL-05, TEL-07 and TEL-08. Observe this update and an ordinary export with the archive already enabled. Capture status before closing the PWA and after at least two scheduled scan opportunities. | Advancing scan and detail timestamps while closed, records for a known run, acknowledged forwarding, and the matching Drive chunk with verified event digest. Compare producer drops and archive drops separately; track backlog, retries and last receipt. Inspect package writes/reads/cleanup from an update. A manual probe establishes only direct connectivity. |
+| 3 · Close gaps found by that observation | Reproduce the first missing transition from discovery to detail fetch, producer outbox, Drive append or verified archive. Check failure, cancellation, restart, late delivery and replay against the same IDs. | A failing case and a passing repeat at the affected boundary. Demonstrate bounded queue growth, retained backoff and isolated account data. Keep historical counters and identify unknown coverage explicitly. |
+| 4 · Make collected records retrievable | TEL-01/02 contract, then TEL-12 time-range/source selection and TEL-13 activity sharing. Define TEL-16 ownership and transition semantics before designing additional high-volume producers. | Exact local-time interval across midnight, single-file native share, stable IDs across retries, explicit partial/expired coverage. Share completed, failed and cancelled activity histories. Specify how Standard aggregates and Developer records coexist and deduplicate. |
+| 5 · Add sources incrementally | TEL-06 Worker metrics, TEL-07 R2 usage, TEL-08 Drive usage, TEL-09 Translate and TEL-10 Azure. For each source, attach provenance, period, units, and observed/estimated/unavailable state. TEL-14 supplies manual fallbacks wherever native access is unavailable. | One ordinary success, one failure or simulated failure, one quota/accounting check and privacy review per source. Preserve Translate reservations and attribution. Deduplicate Azure cache hits/prefetch and Drive client/server views. Require explicit approval for optional provider access. |
+| 6 · Usage and system acceptance | TEL-11 after the source measures and TEL-16 contract are usable. Implement Standard backup aggregates and Developer capture according to the approved design. TEL-15 concludes the end-to-end tests. | Switch modes without duplicating consumption or losing a pending record. Reconcile a known interval to source readings with stale/unknown states visible. Verify retention, overhead, revoke behavior and one useful range/job export across the implemented sources. |
+
+**Independent UI and operations track.** While waiting for unattended observations, test UI-04/05/08 on the installed phone. Save an archive and a diagnostics JSON separately to Files, check for one file per share, inspect failed and completed cards and keep navigation reachable with larger text. In Cíyán, leave a partly finished local session and a linked profile, return and check both progress and reader position. On a sync failure, exercise the existing stay/exit choice. Follow with UI-01 safe area and gestures, UI-02/03 review at 1, 6 and 16 entries and clear rejection above 16, UI-06 header and UI-07 blocker routing, and UI-09 fixed four-hour unlock/lock behavior. Keep one publication job active at a time.
+
+**Operational priorities.** JOB-01 can use this failure as a fixture: a terminal card should identify validation, the affected repository and whether any write occurred, with the run link and historical detail available. JOB-06 should cover retention and the failed-job lock across cancellation and recovery. JOB-02 still needs extraction evidence across modes. For JOB-03, the UI already suppresses polling while hidden; it still requests jobs every 15 seconds on a visible idle view. Measure idle vs active requests before changing frequency or coalescing. Profile JOB-04 using the stage timings from TEL-03. Defer JOB-05 provider integration until the served-build distinction and access needs are agreed.
+
+## Coverage ledger
+
+| ID | State at handoff | Remaining work / evidence required |
+|---|---|---|
+| UI-01 | Implemented workspace-wide; live verification open | All implemented apps/modes, safe area, scroll, no browser zoom, immersive exceptions, map gestures, dialogs |
+| UI-02 | Implemented in 0.1.11; device verification open | Guided upload, detected manifests, standalone file, advanced JSON, invalid input and preserved edits |
+| UI-03 | Implemented in 0.1.11; device verification open | Review 1/6/16 entries, reject >16 clearly, no draft publication, cancellation/back and exact reviewed plan |
+| UI-04 | Replacement prepared | No raw action links throughout workspace; file-only native share, correct external navigation, actual iOS verification |
+| UI-05 | Vertical action groups prepared | Vertical full-width actions everywhere applicable, no avoidable wrapping, structured compact cards and expanded detail, state matrix |
+| UI-06 | Targeted polish implemented; verification open | Header consistency/gear/profile/home/progress, preserve logo, no wholesale redesign |
+| UI-07 | Partial | All disabled controls explain blocker and route to resolution, active job identity, authorization, expiry, across apps |
+| UI-08 | Replacement prepared | Single-column ordinary actions (latest correction), no wrap, loading overlays, prevent double taps, structured telemetry; live checks |
+| UI-09 | Implemented; verification open | Four-hour fixed session, explicit lock, rotation invalidation, expiry, no password headers |
+| JOB-01 | Proposed | Terminal progress/status and notes agree, preserve historical details |
+| JOB-02 | Native export user verified; integrity/extraction open | Preserve actual formats; all modes, Git fidelity and one-step extraction evidence as applicable |
+| JOB-03 | Proposed | Coalesce duplicate jobs/admin polling, hidden/idle stop, measure requests, accurate active progress |
+| JOB-04 | Proposed | Profile update latency; optimize measured waste, preserve candidate/settlement safety |
+| JOB-05 | Future proposal | Actual Cloudflare deployment proof vs GitHub production/main; read-only, optional permission approval |
+| JOB-06 | Open verification | Terminal retention 30d/100, draft 7d, 10 initial visible, unresolved preserved, cleanup and lock/recovery safety |
+| QA-01 | Open verification | Integrated regression, exact base/version, patch replay, live device/deployment, no unintended changes |
+| TEL-01 | Partial | Schema/auth/redaction/replay/producer limits and client spool; cross-source privacy tests |
+| TEL-02 | Backlog scheduling fix prepared | Durable archive backlog, retention/retry/late arrivals, range index, bounded size/usage rollups, revoke and failure tests |
+| TEL-03 | Partial | Full lifecycle/terminal snapshot, failed/cancelled/recovered/self-update, exact stage timings and correlation |
+| TEL-04 | Partial; direct path verified | Sustained automatic discovery while closed, job/step/artifact completeness, safe native execution logs, billing estimates, backoff |
+| TEL-05 | Partial | Independent exact repo/ref/tag/gitlink/production observations before/after, automation, deployment coverage |
+| TEL-06 | Open | Worker instrumentation/native observability, per-worker metrics/errors; optional provider permission probe and manual fallback |
+| TEL-07 | Partial app-side package bucket observations | R2 storage, other relevant buckets, account metrics/operation classes, no extra quota-heavy measurement |
+| TEL-08 | Partial live Drive data | Legacy read/merge, usage and overlap-safe accounting, failure/disconnect/backup regression |
+| TEL-09 | Open | Translate character budget/reservations/cache/upstream/error metrics, attribution and quota safeguards |
+| TEL-10 | Open | Azure direct speech synthesis/cache/prefetch/error/abort/offline, observed char estimates, optional provider metrics |
+| TEL-11 | Open | Unified usage/source health, units/period/provenance/unknown/stale, quota warnings; reconcile timing with TEL-16 |
+| TEL-12 | Open | Dedicated telemetry entry, exact local-time range and source filters, single-file native share and coverage |
+| TEL-13 | Open | Share telemetry on every completed/cancelled/failed activity, correlated attempts/late records, partial/expired coverage |
+| TEL-14 | Open | Manual console buttons, safe imports and optional least-privilege provider setup, no paid service |
+| TEL-15 | Open | Comprehensive end-to-end acceptance, quota overhead, failure isolation, documentation |
+| TEL-16 | Design only | Standard lightweight usage aggregates in backups; Developer comprehensive archive. Define switching, ownership and retention; usage screen later |
+
+## R2 requirements and historical evidence
+
+The following dated material preserves the detailed acceptance criteria and release history. The R3 ledger above records the current release decision.
+
+
+Status: R2 remains locked. A1/A2/B1/B2/B2.1, UI-01, combined v0.1.11 and JOB-02 v0.1.12 published. User confirmed improved UI and native workspace archive sharing; new feedback and diagnostic evidence recorded in the latest ledger. Follow-up package prepared; live acceptance pending. NEXT-01 remains P0. All 32 tracked IDs and prior acceptance criteria preserved. No remote writes by assistant.
 
 ## Baseline
 
@@ -13,14 +103,14 @@ Successful direct update job `50a8edd2-95c2-4221-bd88-060591c21200`: six reposit
 | UI-01 | User | High | Open | Floating headers throughout workspace |
 | UI-02 | User | High | Open | Guided upload and manifest summary |
 | UI-03 | User | High | Open | Scalable review / draft confirmation |
-| UI-04 | User | Medium | Open | Button-styled navigation and actions |
-| UI-05 | User | Medium | Open | Activity / export card layout |
+| UI-04 | User | Medium | Refinement implemented, live verification open | Button-styled navigation and file-only native sharing |
+| UI-05 | User | Medium | Refinement implemented, live verification open | Activity / export card layout |
 | UI-06 | Review proposal | Low | Proposed | Header visual consistency, review only targeted refinements |
 | UI-07 | User | High | Partially implemented | Explain unavailable actions and route to the resolution |
 | UI-08 | User | High | Implemented, verification open | Equal-width actions, loading feedback, structured telemetry status |
 | UI-09 | User | High | Implemented, verification open | Four-hour administrator session |
 | JOB-01 | Review proposal | Low | Proposed | Terminal diagnostic messages |
-| JOB-02 | Review proposal | Medium | Implemented, verification open | Single-extraction repository exports |
+| JOB-02 | Review proposal | Medium | User verified native export; remaining integrity/extraction criteria open | Single-extraction repository exports |
 | JOB-03 | Review proposal | Low | Proposed | Consolidate redundant polling |
 | JOB-04 | Review proposal | Low | Proposed | Measure and optimize update duration safely |
 | JOB-05 | Review proposal | Future | Proposed | Verify actual Cloudflare deployments |
@@ -324,3 +414,18 @@ JOB-02 design decision: retain the runner's original Git-faithful gzip-compresse
 Local verification: 65 Node tests (58 existing + seven export checks), both builds. Real prior 10-repository lightweight export unwrapped to the exact original 30,148,284-byte tar.gz; independent Python ZIP extraction matched byte-for-byte. All ten extracted repositories passed Git fsck, clean status, HEAD/branch/tag and gitlink comparison with WORKSPACE.json, and expected origin URL. Synthetic local runner export fixtures tested lightweight, recursive (initialized submodule) and bundle modes; the original bytes matched, Git histories and tags were intact, executable permissions and symlinks preserved with tar extraction, initialized submodule state matched mode. Local fixtures use local repository URLs and a test-only module initializer; no changes to production runner. Browser/native share on installed iPhone remains unverified. No changes to telemetry.
 
 Live acceptance: after applying v0.1.12, open a recent completed export whose artifact is still available or export iSH-Scripts (lightweight). Unlock, tap Share workspace archive, confirm the share sheet offers a .tar.gz file rather than the outer ZIP; save/share and extract it using a tar-capable extractor. Verify WORKSPACE.json, full .git, clean status and integrity. Test recursive and bundle exports if desired, and a normal source ZIP to confirm unchanged behavior. If iOS rejects sharing the file type or cannot extract it directly, report the limitation; do not mark JOB-02 fully complete until native sharing and intended extraction are confirmed. Existing v0.1.11 telemetry test remains outstanding and its procedure is unchanged. All 32 tracked IDs preserved; NEXT-01 remains P0.
+
+
+## R2 implementation ledger — UI sharing and save-exit refinements; archive backlog (2026-11-25)
+
+User confirms the new UI is much better and export works (single file, multiple-repository ZIP of tars as reported). Do not change archive format in this revision. Screenshot shows an additional text file containing the shared archive filename. All five active copies of the native share helper send a separate `title`; remove that payload and send exactly `{files:[file]}` in both immediate and prepared second-tap paths. Ciyan translation diagnostics now use the same native-only helper rather than the old pinned Core download-capable helper. Keep cancellation, explicit second tap, no navigation/download fallback. UI-04/UI-08 acceptance now explicitly includes saving only the requested file, including diagnostic JSON, not a separate text file. Verify on actual iOS share targets. Existing older Core dependency pins remain intentionally unchanged; generic Core helper is not modified.
+
+UI-05/UI-08: fix GitManager Activity grid parity after the full-width archive action; on wider phone screens the remaining two actions are equal-width and same-row, on narrow screens all actions fill their own row. Preserve actual external navigation and native sharing. Ciyan save-and-exit: keep icon/label unchanged, use a centered top-layer dialog with stage text for local save, reader position, verification, cloud sync, and launcher return. Preserve existing write verification, reader flush, sync failure confirmation and exit failure toast. Close the progress dialog and restore controls on failure; prevent dismissal while saving. UI-01 and other cross-app UI checks remain open unless explicitly verified.
+
+Telemetry evidence (user files, 13:26:54Z status and 13:40:12Z archive): direct probe succeeded, 10 workflow + 25 job/step + 1 artifact = 36 acknowledged, 0 rejected; verified Drive receipt contains 37 records (not supplied), pending 0. Scheduled collector reports one scan, one detail, 19 pending details, 31 enqueued; not yet proof of sustained unattended collection. Archive cumulative droppedEvents=37; producer dropped=7; counters not additive, precise historical loss cause not proven. Latest provided chunk contains ten events (five Google Drive, five repository), valid SHA-256; no GitHub records in this chunk. TEL-04 partial live verification (direct diagnostic success; sustained background and raw logs pending). TEL-02: fix observed code weakness where verified batch writes reset nextFlush to +15 min even if at least 64 records remain. Now schedule +1s for a full remaining batch, 15 min for partial batches; no change to cap, auth, receipt verification, retention, or raw log collection. This reduces congestion but does not prove all prior drops came from that defect. Preserve cumulative historical counters; monitor deltas. TEL-16 mode design only.
+
+Local verification: all 5 published base trees matched exact GitHub trees. GitManager 67/67, GoogleDrive 72/72 full tests; Ciyan 9/9, WorldGen 6/6, Ascendant 4/4 targeted tests after fixing local Core submodule initialization. Full Ciyan/WorldGen/Ascendant suites interrupted by execution time limit; initial packaging failures were due to uninitialized local submodules and targeted reruns/builds passed. All four hosted/standalone builds and Drive syntax check passed. Chromium isolated CSS fixtures: GitManager at 320/360/390/430/768px; Ciyan actual dialog helper at 320/390/430px. Native iPhone share target and real save/sync exit not exercised locally. No changes to archive format or GitRunner. Package order Ciyan, WorldGen, Ascendant, GoogleDrive, GitManager; existing downstream automation owns Ciyan Drive pin and AppLauncher pins. No explicit Core bump. 32 tracked IDs remain.
+
+Live test: share a recent export and diagnostics to Files; confirm exactly one file each, no title .txt. Check completed Activity card widths and Ciyan remote/local profile save-exit including sync failure if encountered. Check normal app exports and registry recovery if applicable. Confirm telemetry archive enabled, direct diagnostic once and automatic scan count increases with app closed; compare historical dropped counters rather than expecting zero. Send telemetry-status JSON and specifically the GitHub-containing chunk named by latest receipt; do not disable/re-enable. Raw GitHub execution logs and other providers remain pending.
+
+Published target bases: Ciyan `034e5b64ffc88b6796210dad6c59183f608645c4` (0.9.23); WorldGen `39cef85a86bba6dfa643d4f968730c9069ed62b5` (0.2.12); Ascendant `8787ec791ef7fc1a29fea11c44fb484f128b8dcd` (0.1.21); PWA-GoogleDrive `f63f38a9de8492883d491c6949b7315e88ea22ae` (0.1.15); PWA-GitManager `d07d6cec7206bc04ac1c6ad13430e3a5de8ec665` (0.1.12). Target versions 0.9.24, 0.2.13, 0.1.22, 0.1.16, 0.1.13 respectively.
