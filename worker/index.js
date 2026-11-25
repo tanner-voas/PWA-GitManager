@@ -26,6 +26,16 @@ export default {async fetch(req,env){try{const url=new URL(req.url),p=url.pathna
  if(!p.startsWith(PREFIX+'/'))return await env.ASSETS.fetch(req);
  if(!await identity(req,env))return fail('Connect the authorized Google account to use Git Manager',401);
  const path=p.slice(PREFIX.length);
+ if(path==='/telemetry/status'&&req.method==='GET'||['/telemetry/enable','/telemetry/disable'].includes(path)&&req.method==='POST'){
+  const action=path.split('/').at(-1);if(action!=='status'&&(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked))return fail('Administrator unlock and same-origin CSRF header required',403);
+  try{const profileCookie=(req.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('__Host-pwa_profile_session='))||'';
+   const data=await env.PROFILES.telemetrySession(url.origin,profileCookie,action);if(!data||data.error)return fail('Telemetry archive unavailable. Check Profiles Worker deployment and Google connection.',503);
+   const {capability,...status}=data;if(action==='enable'){if(typeof capability!=='string')return fail('Telemetry authorization unavailable',503);const r=await internal(env,'/telemetry-authority','POST',{capability});if(!r.ok)return fail('Could not store telemetry authority; retry enabling',503);}
+   if(action==='disable'){const r=await internal(env,'/telemetry-authority','DELETE');if(!r.ok)return fail('Archive disabled; local authority cleanup failed. Retry disabling.',503);}
+   return json(status);
+  }catch{return fail('Telemetry archive not available. Deploy PWA-GoogleDrive v0.1.14 or later first.',503);}
+ }
+
  if(path==='/admin/status'&&req.method==='GET')return json(await adminStatus(req,env));
  if((path==='/admin/unlock'||path==='/admin/lock')&&req.method==='POST'){
   if(!sameOrigin(req))return fail('Same-origin CSRF header required',403);
@@ -102,6 +112,13 @@ export class JobCoordinator {
   return kept;
  }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
+  // Internal only. Never include capability in public job reports, status or logs.
+  if(path==='/telemetry-authority'){
+   if(method==='POST'){const {capability}=await req.json();if(typeof capability!=='string'||capability.length>4096)return fail('Invalid telemetry authority');await this.s.put('telemetry:authority',capability);return json({ok:true});}
+   if(method==='DELETE'){await this.s.delete('telemetry:authority');return json({ok:true});}
+   return fail('Unknown operation',404);
+  }
+
   if(path==='/jobs'&&method==='GET'){return json(await this.history());}
   if(path==='/jobs'&&method==='POST'){const {start,...data}=await req.json();const j={...data,controller:this.env.CONTROLLER_REPO,status:'draft',index:0,records:[],retries:0,createdAt:new Date().toISOString()};if(start===true&&j.mode==='export')return json(await this.begin(j),201);await this.save(j);return json(j,201);}
   let m=/^\/jobs\/([0-9a-f-]{36})(?:\/(start|resume|cancel))?$/.exec(path);if(m){const j=await this.get(m[1]);if(method==='GET'&&!m[2])return json(j);if(method!=='POST')return fail('Method not allowed',405);

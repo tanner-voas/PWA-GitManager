@@ -1,4 +1,4 @@
-# PWA-GitManager v0.1.4
+# PWA-GitManager v0.1.5
 
 A mobile-first GitHub workspace manager for AppLauncher and a standalone recovery URL. GitHub is the source of truth; the iPhone never needs a local Git clone. The implementation is split into this repository (browser app + Cloudflare API) and **PWA-GitRunner**, a separate **private** repository that runs trusted GitHub Actions jobs. Install the same private GitHub App on all repositories you want to manage, including both of these. New installations/repositories are discovered from the installation API, not AppLauncher's application list.
 
@@ -35,3 +35,6 @@ Build: `python3 package.py` (emits `dist/gitmanager` and `dist/standalone`). Tes
 
 ## v0.1.4
 Header controls follow the workspace convention. File exports use native file sharing, including an explicit second tap after asynchronous preparation. No download navigation fallback. History shows ten jobs initially; completed/cancelled jobs are retained for up to 30 days (100 newest), inactive drafts for seven days. Active or unresolved publication records are retained. A running attempt can be cancelled before write credentials are issued; uncertain writes must be recovered. Existing export artifact lifetime remains one day.
+
+## Telemetry foundation
+Settings contains explicit administrator-gated enrollment and archive status. The server-only Profiles service binding returns a narrowly scoped append capability stored privately in the job coordinator; there is no browser token or public append route. This release captures only Drive events. Collector adapters, reporting and share actions are later telemetry phases. Requires deployed PWA-GoogleDrive v0.1.14. Older Profiles Workers remain compatible with ordinary jobs.
