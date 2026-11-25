@@ -42,8 +42,8 @@ export default {async fetch(req,env,ctx){try{const url=new URL(req.url),p=url.pa
    const {capability,...status}=data;if(action==='enable'){if(typeof capability!=='string')return fail('Telemetry authorization unavailable',503);const r=await internal(env,'/telemetry-authority','POST',{capability});if(!r.ok)return fail('Could not store telemetry authority; retry enabling',503);}
    if(action==='disable'){const r=await internal(env,'/telemetry-authority','DELETE');if(!r.ok)return fail('Archive disabled; local authority cleanup failed. Retry disabling.',503);}
    if(action==='status'&&ctx)try{const r=await collector(env,'status');if(r.ok)outbox=await r.json();}catch{}
-   let workflowCollector=null;if(ctx)try{if(action==='disable'||!status.enabled){const r=await poller(env,'stop','POST',{});if(r.ok)workflowCollector=await r.json();}else{const r=await poller(env,'ensure','POST',{manual:action==='poll',reset:action==='enable'});if(r.ok)workflowCollector=await r.json();}}catch{}
-   return json(ctx?{...status,producer:outbox,workflowCollector}:status);
+   let workflowCollector=null,workflowCollectorError=null;if(ctx)try{let r;if(action==='disable'||!status.enabled)r=await poller(env,'stop','POST',{});else if(action==='poll')r=await poller(env,'scan','POST',{});else r=await poller(env,'ensure','POST',{reset:action==='enable'});if(r.ok)workflowCollector=await r.json();else workflowCollectorError='collector-http-'+r.status;}catch{workflowCollectorError='collector-unreachable';}
+   return json(ctx?{...status,producer:outbox,workflowCollector,workflowCollectorError}:status);
   }catch{return fail('Telemetry archive not available. Deploy PWA-GoogleDrive v0.1.14 or later first.',503);}
  }
 
@@ -125,7 +125,7 @@ export class JobCoordinator {
   return kept;
  }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
-  if(path.startsWith('/workflow-poller/')){const poll=this.workflowPoller();if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:workflow-poller-mode',true);if(path==='/workflow-poller/ensure')return json(await poll.ensure(await req.json()));if(path==='/workflow-poller/stop')return json(await poll.stop());return fail('Unknown poller operation',404);}
+  if(path.startsWith('/workflow-poller/')){const poll=this.workflowPoller();if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:workflow-poller-mode',true);if(path==='/workflow-poller/ensure')return json(await poll.ensure(await req.json()));if(path==='/workflow-poller/scan')return json(await poll.scanNow());if(path==='/workflow-poller/stop')return json(await poll.stop());return fail('Unknown poller operation',404);}
   // Internal-only collector endpoints; the public route table never forwards these.
   if(path.startsWith('/collector/')){const box=new TelemetryOutbox(this.s,this.env.PROFILES);if(path==='/collector/status'&&method==='GET')return json(await box.status());if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:collector-mode',true);if(path==='/collector/enqueue'){const {capability,items,poll}=await req.json();if(poll&&(!Array.isArray(items)||items.length>64||(await box.status()).pending+items.length>80))return fail('Telemetry queue busy',409);if(capability!==(await box.state()).capability){const authority=await internal(this.env,'/telemetry-authority');if(!authority.ok||(await authority.json()).capability!==capability)return fail('Telemetry authority changed',409);}return json(await box.enqueue(capability,items)||{ok:false});}if(path==='/collector/flush')return json(await box.drain({manual:true}));if(path==='/collector/clear'){const {capability}=await req.json();await box.clear(capability);return json({ok:true});}return fail('Unknown collector operation',404);}
   // Internal only. Never include capability in public job reports, status or logs.
