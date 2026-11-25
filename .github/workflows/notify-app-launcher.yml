@@ -1,0 +1,32 @@
+name: Notify AppLauncher of Git Manager update
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send GitHub repository_dispatch
+        env:
+          TOKEN: ${{ secrets.APP_LAUNCHER_DISPATCH_TOKEN }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$TOKEN" ]]; then
+            echo "::error::Set APP_LAUNCHER_DISPATCH_TOKEN (fine-grained token: AppLauncher Contents write)."
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error --retry 3 \
+            --request POST \
+            --header "Authorization: Bearer $TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data "{\"event_type\":\"gitmanager-updated\",\"client_payload\":{\"app\":\"gitmanager\",\"sha\":\"$SHA\"}}" \
+            https://api.github.com/repos/tanner-voas/AppLauncher/dispatches

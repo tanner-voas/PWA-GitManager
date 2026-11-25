@@ -32,7 +32,7 @@ GitHub → PWA-GitRunner → Settings → Secrets and variables → Actions:
 * Variable `GIT_MANAGER_URL` = `https://pwa-git-api.tannervoas.workers.dev` (no trailing path).
 * Secret `GIT_JOB_RUNNER_SECRET` = exact Worker `RUNNER_SECRET`.
 
-No GitHub App key here. Do not invoke execute-git-job manually; the backend creates and claims persistent attempts. The public PWA-GitManager is the UI/Worker code repo; PWA-GitRunner owns the trusted execution policies. Existing hosted-app push workflows and version tagging are retained. The Worker explicitly dispatches AppLauncher after a manager self-update; AppLauncher's existing scheduled reconciliation also picks up external changes.
+No GitHub App key here. Do not invoke execute-git-job manually; the backend creates and claims persistent attempts. The public PWA-GitManager is the UI/Worker code repo; PWA-GitRunner owns the trusted execution policies. Existing hosted-app push workflows and version tagging are retained. Configure the PWA-GitManager repository Actions secret `APP_LAUNCHER_DISPATCH_TOKEN` (fine-grained token with AppLauncher Contents write access), just as for Ciyan, WorldGen and Ascendant. The notification workflow sends `gitmanager-updated` on each main push and supports manual dispatch. The Worker retains its self-update dispatch as a fallback; AppLauncher serializes reconciliation and also has scheduled reconciliation.
 
 ## Standalone sign-in (recommended before AppLauncher integration)
 
