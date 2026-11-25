@@ -1,4 +1,4 @@
-# PWA-GitManager v0.1.7
+# PWA-GitManager v0.1.8
 
 A mobile-first GitHub workspace manager for AppLauncher and a standalone recovery URL. GitHub is the source of truth; the iPhone never needs a local Git clone. The implementation is split into this repository (browser app + Cloudflare API) and **PWA-GitRunner**, a separate **private** repository that runs trusted GitHub Actions jobs. Install the same private GitHub App on all repositories you want to manage, including both of these. New installations/repositories are discovered from the installation API, not AppLauncher's application list.
 
@@ -46,3 +46,7 @@ Settings now reports the scheduled alarm, next upload, last attempt and safe err
 ### Telemetry B1
 
 GitManager 0.1.7 adds bounded structured Git job, runner callback, observed GitHub workflow and repository SHA telemetry to the existing Google Drive archive. See [TELEMETRY_B1.md](TELEMETRY_B1.md) for scope, privacy, queue behavior and live tests. The locked roadmap remains in [WORKSPACE_ROADMAP.md](WORKSPACE_ROADMAP.md).
+
+### Telemetry B2 (v0.1.8)
+
+Open Settings once after deployment while the unified archive is enabled to initialize independent GitHub workflow collection. The read-only collector uses the existing GitHub App and its own Durable Object alarm. It can collect while the app is closed; see [TELEMETRY_B2.md](TELEMETRY_B2.md) for scan limits, metadata, manual testing, and remaining coverage gaps. No new cloud secrets, permissions, bindings, or Actions runs required.

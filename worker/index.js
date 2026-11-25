@@ -2,6 +2,7 @@ import {adminStatus,unlockAdmin,lockCookie,sameOrigin} from './admin.js';
 import {MAX_UPLOAD,normalizePlan,json,fail,digest,constantEqual,SHA,REPO,pathOK} from './protocol.js';
 import {gh,token,readToken,installed,repoRoute,dispatch} from './github.js';
 import {TelemetryOutbox,jobEvents,releaseEvent,repoEvents,workflowEvent} from './telemetry.js';
+import {WorkflowCollector,workflowIO} from './workflow-collector.js';
 const PREFIX='/_git/v1', RUN='/_git-runner/v1';
 const originOK=(env,url)=>String(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim()).includes(url.origin);
 async function identity(req,env){const url=new URL(req.url);if(!originOK(env,url)||!env.PROFILES)return false;const r=await env.PROFILES.fetch(new Request(url.origin+'/_profiles/v1/status',{headers:{Cookie:req.headers.get('Cookie')||''}}));if(!r.ok)return false;const s=await r.json();return s.connected===true&&typeof s.email==='string'&&String(env.ADMIN_EMAIL||'').toLowerCase()===s.email.toLowerCase()&&!!env.ADMIN_EMAIL;}
@@ -10,6 +11,7 @@ const DO=e=>e.JOBS.get(e.JOBS.idFromName('workspace-v1'));
 const internal=(e,path,method='GET',body)=>DO(e).fetch(new Request('https://internal'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)}));
 // The second instance uses the existing binding but owns only its telemetry queue/alarm.
 const collector=(e,path,method='GET',body)=>e.JOBS.get(e.JOBS.idFromName('workspace-telemetry-b1')).fetch(new Request('https://internal/collector/'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)}));
+const poller=(e,path,method='GET',body)=>e.JOBS.get(e.JOBS.idFromName('workspace-workflow-poller-b2')).fetch(new Request('https://internal/workflow-poller/'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)}));
 function defer(ctx,work){if(ctx?.waitUntil)ctx.waitUntil(Promise.resolve().then(work).catch(()=>console.warn('git-telemetry','capture-unavailable')));}
 async function enqueue(env,capability,items){if(!capability||!items.length)return;for(let i=0;i<items.length;i+=64){const r=await collector(env,'enqueue','POST',{capability,items:items.slice(i,i+64)});if(!r.ok)throw Error('Telemetry enqueue failed');}}
 function observe(ctx,env,items){if(!items.length)return;defer(ctx,async()=>{const r=await internal(env,'/telemetry-authority');if(r.ok)await enqueue(env,(await r.json()).capability,items);});}
@@ -32,15 +34,16 @@ export default {async fetch(req,env,ctx){try{const url=new URL(req.url),p=url.pa
  if(!p.startsWith(PREFIX+'/'))return await env.ASSETS.fetch(req);
  if(!await identity(req,env))return fail('Connect the authorized Google account to use Git Manager',401);
  const path=p.slice(PREFIX.length);
- if(path==='/telemetry/status'&&req.method==='GET'||['/telemetry/enable','/telemetry/disable','/telemetry/flush'].includes(path)&&req.method==='POST'){
+ if(path==='/telemetry/status'&&req.method==='GET'||['/telemetry/enable','/telemetry/disable','/telemetry/flush','/telemetry/poll'].includes(path)&&req.method==='POST'){
   const action=path.split('/').at(-1);if(action!=='status'&&(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked))return fail('Administrator unlock and same-origin CSRF header required',403);
   try{const profileCookie=(req.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('__Host-pwa_profile_session='))||'';
    let outbox=null;if(action==='flush'&&ctx)try{const r=await collector(env,'flush','POST',{});if(r.ok)outbox=await r.json();}catch{}
-   const data=await env.PROFILES.telemetrySession(url.origin,profileCookie,action);if(!data||data.error)return fail('Telemetry archive unavailable. Check Profiles Worker deployment and Google connection.',503);
+   const data=await env.PROFILES.telemetrySession(url.origin,profileCookie,action==='poll'?'status':action);if(!data||data.error)return fail('Telemetry archive unavailable. Check Profiles Worker deployment and Google connection.',503);
    const {capability,...status}=data;if(action==='enable'){if(typeof capability!=='string')return fail('Telemetry authorization unavailable',503);const r=await internal(env,'/telemetry-authority','POST',{capability});if(!r.ok)return fail('Could not store telemetry authority; retry enabling',503);}
    if(action==='disable'){const r=await internal(env,'/telemetry-authority','DELETE');if(!r.ok)return fail('Archive disabled; local authority cleanup failed. Retry disabling.',503);}
    if(action==='status'&&ctx)try{const r=await collector(env,'status');if(r.ok)outbox=await r.json();}catch{}
-   return json(ctx?{...status,producer:outbox}:status);
+   let workflowCollector=null;if(ctx)try{if(action==='disable'||!status.enabled){const r=await poller(env,'stop','POST',{});if(r.ok)workflowCollector=await r.json();}else{const r=await poller(env,'ensure','POST',{manual:action==='poll',reset:action==='enable'});if(r.ok)workflowCollector=await r.json();}}catch{}
+   return json(ctx?{...status,producer:outbox,workflowCollector}:status);
   }catch{return fail('Telemetry archive not available. Deploy PWA-GoogleDrive v0.1.14 or later first.',503);}
  }
 
@@ -94,7 +97,8 @@ export class JobCoordinator {
  async watch(delay=120000){if(this.s.setAlarm)await this.s.setAlarm(Date.now()+delay);}
  // Alarms are independent of browser connections. Retry ONLY an explicitly
  // reported automation timeout. Never redispatch an ambiguous write/dispatch.
- alarm(){const p=this.queue.then(async()=>{if(await this.s.get('telemetry:collector-mode'))return new TelemetryOutbox(this.s,this.env.PROFILES).drain();return this.observe();}).catch(async e=>{console.warn('Git Manager watchdog or telemetry alarm','retry');await this.watch();});this.queue=p.then(()=>{},()=>{});return p;}
+ workflowPoller(){return new WorkflowCollector(this.s,workflowIO(this.env,async()=>{const r=await internal(this.env,'/telemetry-authority');if(!r.ok)throw Error('authority-unavailable');return (await r.json()).capability;},async()=>{const r=await collector(this.env,'status');if(!r.ok)throw Error('outbox-unavailable');return r.json();},async(capability,items)=>{const r=await collector(this.env,'enqueue','POST',{capability,items,poll:true});return r.ok;}));}
+ alarm(){const p=this.queue.then(async()=>{if(await this.s.get('telemetry:workflow-poller-mode'))return this.workflowPoller().tick();if(await this.s.get('telemetry:collector-mode'))return new TelemetryOutbox(this.s,this.env.PROFILES).drain();return this.observe();}).catch(async e=>{console.warn('Git Manager watchdog or telemetry alarm','retry');await this.watch();});this.queue=p.then(()=>{},()=>{});return p;}
  async runState(a,jobId){const t=await readToken(this.env),run=await gh(t,repoRoute(this.env,this.env.CONTROLLER_REPO)+'/actions/runs/'+a.runId);try{this.capture([workflowEvent(this.env.CONTROLLER_REPO,run,Date.now(),{jobId,attemptId:a.id})].filter(Boolean));}catch{}return run;}
  async observe(){const active=await this.s.get('active');if(!active)return;const j=await this.get(active),a=j.attempt;
   if(j.status==='paused'&&j.retryAt){
@@ -121,8 +125,9 @@ export class JobCoordinator {
   return kept;
  }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
+  if(path.startsWith('/workflow-poller/')){const poll=this.workflowPoller();if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:workflow-poller-mode',true);if(path==='/workflow-poller/ensure')return json(await poll.ensure(await req.json()));if(path==='/workflow-poller/stop')return json(await poll.stop());return fail('Unknown poller operation',404);}
   // Internal-only collector endpoints; the public route table never forwards these.
-  if(path.startsWith('/collector/')){const box=new TelemetryOutbox(this.s,this.env.PROFILES);if(path==='/collector/status'&&method==='GET')return json(await box.status());if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:collector-mode',true);if(path==='/collector/enqueue'){const {capability,items}=await req.json();if(capability!==(await box.state()).capability){const authority=await internal(this.env,'/telemetry-authority');if(!authority.ok||(await authority.json()).capability!==capability)return fail('Telemetry authority changed',409);}return json(await box.enqueue(capability,items)||{ok:false});}if(path==='/collector/flush')return json(await box.drain({manual:true}));if(path==='/collector/clear'){const {capability}=await req.json();await box.clear(capability);return json({ok:true});}return fail('Unknown collector operation',404);}
+  if(path.startsWith('/collector/')){const box=new TelemetryOutbox(this.s,this.env.PROFILES);if(path==='/collector/status'&&method==='GET')return json(await box.status());if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:collector-mode',true);if(path==='/collector/enqueue'){const {capability,items,poll}=await req.json();if(poll&&(!Array.isArray(items)||items.length>64||(await box.status()).pending+items.length>80))return fail('Telemetry queue busy',409);if(capability!==(await box.state()).capability){const authority=await internal(this.env,'/telemetry-authority');if(!authority.ok||(await authority.json()).capability!==capability)return fail('Telemetry authority changed',409);}return json(await box.enqueue(capability,items)||{ok:false});}if(path==='/collector/flush')return json(await box.drain({manual:true}));if(path==='/collector/clear'){const {capability}=await req.json();await box.clear(capability);return json({ok:true});}return fail('Unknown collector operation',404);}
   // Internal only. Never include capability in public job reports, status or logs.
   if(path==='/telemetry-authority'){
    if(method==='POST'){const {capability}=await req.json();if(typeof capability!=='string'||capability.length>4096)return fail('Invalid telemetry authority');await this.s.put('telemetry:authority',capability);return json({ok:true});}
