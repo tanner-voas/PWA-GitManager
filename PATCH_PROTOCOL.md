@@ -34,14 +34,18 @@ A bundle cannot rebase or rewrite declared pins; it must already be exactly one 
 
 ## Public same-origin API (v1)
 
-All `/_git/v1/*` routes require authorized Google session. Non-GET also requires header `X-PWA-CSRF: 1`, exact same-origin `Origin`, and `X-Git-Unlock` (administrator phrase, never log/store). Responses no-store. API is intentionally not an arbitrary GitHub proxy.
+All `/_git/v1/*` routes require authorized Google session. Non-GET also requires header `X-PWA-CSRF: 1`, exact same-origin `Origin`, and a valid signed administrator cookie (no raw password header). Responses no-store. API is intentionally not an arbitrary GitHub proxy.
 
 | Method/path | Request/response |
 |---|---|
+| GET `/admin/status` | Validated session status and expiration |
+| POST `/admin/unlock` | JSON `{password}`; sets 30-minute secure cookie after identity and CSRF checks |
+| POST `/admin/lock` | Clear current cookie after identity and CSRF checks |
+| GET `/jobs/{id}/download` | Authorized completed export: redirect to GitHub short-lived signed artifact URL |
 | GET `/repos?page=1` | `{repos:[{name,private,defaultBranch,head,version,tag,production,url}],next}`; pagination |
 | GET `/repos/{repo}/{commits,tags,branches,files,pins,runs,pulls,source}` | `ref`, `path`, `page` as applicable; metadata, base64 file data, or source ZIP |
 | POST `/jobs` | Multipart `upload` (File), `plan` JSON string, `mode` `direct/pr/dry`; returns draft |
-| POST `/exports` | JSON `{repositories:[...],format:"lightweight"|"recursive"|"bundle"}`; returns draft |
+| POST `/exports` | JSON `{repositories:[...],format:"lightweight"|"recursive"|"bundle",start:true}`; start immediately if requested, otherwise return draft |
 | GET `/jobs` | Latest job records |
 | GET `/jobs/{id}` | Full job metadata, attempts, publication records |
 | POST `/jobs/{id}/start` | Explicitly approve draft |
@@ -50,11 +54,11 @@ All `/_git/v1/*` routes require authorized Google session. Non-GET also requires
 | POST `/repos/{repo}/workflows/tags` | Dispatch current main's `tag-main.yml` |
 | POST `/repos/AppLauncher/workflows/reconcile` | Dispatch current main's validation workflow |
 
-All paths above are relative to `/_git/v1`. States: draft, running, paused, failed, awaiting-pr, completed, cancelled. `progress` contains phase/note/time; `retryAt` identifies a scheduled automatic observation retry. The durable watchdog observes lost callbacks without redispatching ambiguous writes. `index` counts completed update steps; final settlement can still be running at full count. A failed job retains the global write lock until resumed or explicitly cancelled. A final settlement failure means publication can be complete but automation is pending. Use logs and the records to distinguish this. For an export, open the linked private Actions run → Artifacts → `prepared-*` → extract `workspace.tar.gz`.
+All paths above are relative to `/_git/v1`. States: draft, running, paused, failed, awaiting-pr, completed, cancelled. `progress` contains phase/note/time; `retryAt` identifies a scheduled automatic observation retry. The durable watchdog observes lost callbacks without redispatching ambiguous writes. `index` counts completed update steps; final settlement can still be running at full count. A failed job retains the global write lock until resumed or explicitly cancelled. A final settlement failure means publication can be complete but automation is pending. Use logs and the records to distinguish this. For an export, unlock and download directly in Activity, or open the linked private Actions run → Artifacts → `prepared-*` → extract `workspace.tar.gz`.
 
 ## Private runner interface
 
-`POST /_git-runner/v1/{jobId}/{attemptId}/{claim,package,token,candidate,published,progress,finish}` with `Authorization: Bearer RUNNER_SECRET` and JSON `runId` (actual GitHub run ID). This path is not forwarded by AppLauncher. A claim binds the current durable attempt to one run. `package` returns raw bytes. `token` with `{write:false}` gives read-only installation access; `write:true` additionally requires exact registered candidate SHA and consumes one scoped write-token grant. `candidate` registers base/commit/tree/version. `published` records a confirmed exact commit or PR. `progress` accepts a bounded phase and note for live Activity status. `candidate` additionally carries `verifiedGitlinks`. `finish` reports success/race/paused/failed. Only trusted PWA-GitRunner workflow jobs use these endpoints. Preparation and publishing use a pinned controller checkout; candidate validation is an isolated job with no write token or runner secret. Never call runner endpoints from the browser or expose tokens. Contract changes must be coordinated across both repos. The runner repo must remain private; Worker refuses to dispatch to a public controller.
+`POST /_git-runner/v1/{jobId}/{attemptId}/{claim,package,token,candidate,published,progress,finish}` with `Authorization: Bearer RUNNER_SECRET` and JSON `runId` (actual GitHub run ID). This path is not forwarded by AppLauncher. A claim binds the current durable attempt to one run. `package` returns raw bytes. `token` with `{write:false}` gives read-only installation access; `write:true` additionally requires exact registered candidate SHA and consumes one scoped write-token grant. `candidate` registers base/commit/tree/version. `published` records a confirmed exact commit or PR. `progress` accepts a bounded phase and note for live Activity status; export progress may include integer `done` and `total` counts. `candidate` additionally carries `verifiedGitlinks`. `finish` reports success/race/paused/failed. Only trusted PWA-GitRunner workflow jobs use these endpoints. Preparation and publishing use a pinned controller checkout; candidate validation is an isolated job with no write token or runner secret. Never call runner endpoints from the browser or expose tokens. Contract changes must be coordinated across both repos. The runner repo must remain private; Worker refuses to dispatch to a public controller.
 
 ## Automation barrier
 
