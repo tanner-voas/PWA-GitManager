@@ -1,6 +1,6 @@
 # Workspace roadmap — R2 (2026-11-25)
 
-Status: R2 approved by user on 2026-11-25; Phase A1 prepared for publication. Scope and acceptance criteria below remain locked. NEXT-01 is P0; all prior items remain intact. No remote changes made by assistant; publication and live validation pending.
+Status: R2 approved by user on 2026-11-25; Phase A1 published; Phase A2 prepared for publication. Scope and acceptance criteria below remain locked. NEXT-01 is P0; all prior items remain intact. No remote changes made by assistant; publication and live validation pending.
 
 ## Baseline
 
@@ -16,6 +16,7 @@ Successful direct update job `50a8edd2-95c2-4221-bd88-060591c21200`: six reposit
 | UI-04 | User | Medium | Open | Button-styled navigation and actions |
 | UI-05 | User | Medium | Open | Activity / export card layout |
 | UI-06 | Review proposal | Low | Proposed | Header visual consistency, review only targeted refinements |
+| UI-07 | User | High | Open | Explain unavailable actions and route to the resolution |
 | JOB-01 | Review proposal | Low | Proposed | Terminal diagnostic messages |
 | JOB-02 | Review proposal | Medium | Proposed | Single-extraction repository exports |
 | JOB-03 | Review proposal | Low | Proposed | Consolidate redundant polling |
@@ -26,6 +27,10 @@ Successful direct update job `50a8edd2-95c2-4221-bd88-060591c21200`: six reposit
 | NEXT-01 | User | P0 | Open | Unified telemetry; TEL-01 through TEL-15 (section D) |
 
 ## A. UI requirements
+
+### UI-07 — explain unavailable actions (added 2026-11-25)
+Every disabled action must visibly explain the blocking condition. Administrator actions show lock status and an accessible route to Settings/unlock; active-job restrictions identify the blocking job and provide Activity access; Drive authorization restrictions link to profile management; missing configuration/permissions/expired data explain the reason and offer a resolution where possible. Update availability when the blocker resolves. Applies to all GitManager screens including telemetry; other apps should avoid silent disabled controls. This is a new permanent ID, not a replacement for existing requirements. A2 supplies local reasons for its new manual-flush control only; the wider item stays open.
+
 
 ### UI-01 — persistent floating top bars
 User requirement: standard top menu/header remains fully visible and usable while scrolling in all apps/services, not clipped or obscured by the iPhone status bar. Screenshots 4–6 (IMG_5093–5095) show Ciyan header scrolling away and AppLauncher header blurred/clipped near the top; GitManager screenshot 7 also warrants testing. Scope: AppLauncher, Ciyan, GitManager, WorldGen, Ascendant; future Chronicle follows the convention when implemented, no implementation of Chronicle now. Hosted and standalone modes. Source evidence: Ciyan and AppLauncher already declare sticky positioning; both have document-level overflow rules that are worth investigating; GitManager header has ordinary layout CSS. WorldGen uses an absolute header within a fixed root, Ascendant already declares sticky positioning. Root cause must be reproduced rather than assumed. Check actual scroll containers, overflow, host wrappers, safe-area offsets, stacking, sizing and modal interactions.
@@ -83,14 +88,14 @@ The previously reserved NEXT-01 is now defined. Comprehensive automatic capture,
 
 | ID | Scope | State | Acceptance evidence |
 |---|---|---|---|
-| TEL-01 | Shared schema, correlation, redaction and authorization | A1 staged; partial | Contract, privacy and cross-source fixtures |
-| TEL-02 | Google Drive durable archive, old schema compatibility, retry and retention | A1 staged; partial | Actual Drive chunks, failure and retention tests |
+| TEL-01 | Shared schema, correlation, redaction and authorization | A1 published; partial | Contract, privacy and cross-source fixtures |
+| TEL-02 | Google Drive durable archive, old schema compatibility, retry and retention | A2 staged; partial | Actual Drive chunks, failure and retention tests |
 | TEL-03 | GitManager/Runner job lifecycle telemetry and terminal snapshots | Open | Successful, failed, cancelled, recovered job traces |
 | TEL-04 | GitHub Actions runs, jobs, steps and sanitized log collection | Open | Public/private workflows, failed startup, manual pushes and retries |
 | TEL-05 | Repository/ref/hash/dependency/deployment observations | Open | Exact hashes, before/after and automation propagation evidence |
 | TEL-06 | Worker operational telemetry and native observability collection | Open; provider permission probe required | Per-worker requests/errors, query coverage, platform gap reporting |
 | TEL-07 | R2 storage and operation telemetry | Open; optional provider metrics probe | Operation accounting and storage snapshots |
-| TEL-08 | Existing Google Drive sync telemetry integration and usage | A1 staged; partial | Existing data preserved, no double count, Drive failures |
+| TEL-08 | Existing Google Drive sync telemetry integration and usage | A2 staged; partial | Existing data preserved, no double count, Drive failures |
 | TEL-09 | Google Translate telemetry and budget reporting | Open | Cache, reservation, upstream, errors and monthly counter tests |
 | TEL-10 | Azure Speech telemetry and usage estimates | Open; provider credentials optional | Synthesis/cache/prefetch/error/abort/offline tests |
 | TEL-11 | Unified usage dashboard, free-tier safeguards and source health | Open | Units, periods, confidence and stale/unknown states |
@@ -208,3 +213,13 @@ User approved R2 and requested first GitManager package. Only TEL-01, TEL-02 and
 - TEL-03..07, TEL-09..15 unchanged/open. UI-01..06, JOB-01..06, QA-01 unchanged. Do not skip outstanding A requirements when beginning B. No additional credentials/Google scopes required for A1; Cloudflare profiles and manager deployments must actually be confirmed.
 
 Next: verify A1 enrollment, actual Drive v2 chunk, status/metrics, ordinary backups and revoke semantics. Then finish remaining A contract/storage requirements or explicitly track in dependent B/D/E phases; instrument GitManager/GitRunner and GitHub collectors under TEL-03/04/05, followed by other approved producers.
+
+
+## R2 implementation ledger — Phase A2 (2026-11-25)
+
+A1 user feedback: archive enabled, one pending event, zero attempted Drive requests, no upload seen. Screenshots four minutes apart. Supplied log: 163 pwa-git-api events, 162 HTTP 2xx and one admin unlock 403; five successful status requests and one successful enable. No Profiles Worker/Drive write evidence. Root cause not established; 15-minute original flush interval explains observed pending state but cannot rule out alarm problems. Remote main A1 heads verified: PWA-GoogleDrive e417246a0666d95628982e28bc7cf0e4f334fe98; PWA-GitManager 2c55896dd3932e9e11710dbefd646c62b5642916; PWA-Core 30867c7bce868e7feab9a2c4e9c5d9269dc5641f. AppLauncher main 240c2f09cc09d59d7d76e066f11110ad11f7dc21 at check; runner inaccessible via connector, not changed.
+
+- TEL-02/08: Drive 0.1.14 → 0.1.15; first flush one minute for new enrollments, status alarm repair, admin manual immediate one-batch flush with cooldown, exact read-back receipt, fixed diagnostics, independent maintenance failure/backoff. Existing queue retained. GoogleDrive tests 69 passed; syntax checks passed.
+- TEL-02/08: GitManager 0.1.5 → 0.1.6, new status/flush UI and authorization tests. 32 Node tests passed; hosted and standalone packaging passed. UI-07 added as permanent open ID per user, local explanation for new action only. No other UI scope changed.
+- No new permissions, Core bump, or direct AppLauncher patch. Existing downstream automation must settle and actual Worker deployments must be checked. Local patch bases reconstructed from exported workspace plus exact A1 patches; manifest uses verified remote main hashes because GitManager recommits patches. No live deployment or actual Drive validation performed here.
+- TEL-01/02/08 remain partial. TEL-03..07 and TEL-09..15 remain open; no GitHub/GitManager/Cloudflare/R2/Translate/Azure source ingestion in A2. No range exports or job telemetry share yet. All prior 28 implementation IDs remain, plus UI-07 (29 total excluding umbrella NEXT-01). No other changes to locked scope. Next: test verified chunk, real backup, automatic alarm while closed, then phase B producers and subsequent collectors per TEL-15. Preserve all pending criteria.

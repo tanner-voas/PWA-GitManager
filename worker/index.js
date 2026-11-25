@@ -26,7 +26,7 @@ export default {async fetch(req,env){try{const url=new URL(req.url),p=url.pathna
  if(!p.startsWith(PREFIX+'/'))return await env.ASSETS.fetch(req);
  if(!await identity(req,env))return fail('Connect the authorized Google account to use Git Manager',401);
  const path=p.slice(PREFIX.length);
- if(path==='/telemetry/status'&&req.method==='GET'||['/telemetry/enable','/telemetry/disable'].includes(path)&&req.method==='POST'){
+ if(path==='/telemetry/status'&&req.method==='GET'||['/telemetry/enable','/telemetry/disable','/telemetry/flush'].includes(path)&&req.method==='POST'){
   const action=path.split('/').at(-1);if(action!=='status'&&(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked))return fail('Administrator unlock and same-origin CSRF header required',403);
   try{const profileCookie=(req.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('__Host-pwa_profile_session='))||'';
    const data=await env.PROFILES.telemetrySession(url.origin,profileCookie,action);if(!data||data.error)return fail('Telemetry archive unavailable. Check Profiles Worker deployment and Google connection.',503);

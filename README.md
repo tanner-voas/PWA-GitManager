@@ -1,4 +1,4 @@
-# PWA-GitManager v0.1.5
+# PWA-GitManager v0.1.6
 
 A mobile-first GitHub workspace manager for AppLauncher and a standalone recovery URL. GitHub is the source of truth; the iPhone never needs a local Git clone. The implementation is split into this repository (browser app + Cloudflare API) and **PWA-GitRunner**, a separate **private** repository that runs trusted GitHub Actions jobs. Install the same private GitHub App on all repositories you want to manage, including both of these. New installations/repositories are discovered from the installation API, not AppLauncher's application list.
 
@@ -38,3 +38,7 @@ Header controls follow the workspace convention. File exports use native file sh
 
 ## Telemetry foundation
 Settings contains explicit administrator-gated enrollment and archive status. The server-only Profiles service binding returns a narrowly scoped append capability stored privately in the job coordinator; there is no browser token or public append route. This release captures only Drive events. Collector adapters, reporting and share actions are later telemetry phases. Requires deployed PWA-GoogleDrive v0.1.14. Older Profiles Workers remain compatible with ordinary jobs.
+
+### Telemetry A2 (v0.1.6)
+
+Settings now reports the scheduled alarm, next upload, last attempt and safe error category, last verified Drive chunk and separate maintenance errors. Use **Upload pending now** (administrator unlock, one batch, one-minute manual cooldown) to verify the already enrolled archive without clearing its pending records. Refresh status to see automatic uploads. Requires Profiles Worker v0.1.15 for the new flush action. No new Google authorization or GitHub App permissions. GitHub/GitManager and other source collectors remain pending in the locked roadmap.
