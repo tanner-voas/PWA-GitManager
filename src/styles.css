@@ -48,3 +48,6 @@ body:has(.gm) #app.app-frame{padding-inline:0;padding-bottom:0;width:min(100%,90
 @media(prefers-color-scheme:dark){.gm-busy-card{background:#24323a;color:#edf3f4;border-color:#45555e}.gm-busy-card small{color:#b5c3c8}}
 
 .gm #gm-error:not(:empty){padding:12px;border:1px solid var(--line);border-radius:12px;margin:10px 0;scroll-margin-top:140px;background:var(--panel)}
+
+/* R8.1: one compact capture-period stepper; actions remain vertically stacked. */
+.gm .gm-period-counter{display:grid;grid-template-columns:48px minmax(0,1fr) 48px;gap:8px;align-items:center}.gm .gm-period-counter input{text-align:center;margin:0;appearance:textfield}.gm .gm-period-counter input::-webkit-inner-spin-button,.gm .gm-period-counter input::-webkit-outer-spin-button{appearance:none;margin:0}.gm [hidden]{display:none!important}

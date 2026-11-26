@@ -9,6 +9,17 @@ export function parseInput(value,utc=false){
  if(!utc)for(let m=-180;m<=180;m+=15)if(m&&localInput(ms+m*60000)===value)throw Error('Ambiguous local time at a clock change. Select UTC and enter the intended time.');
  return d.toISOString();
 }
+export function captureRange(periods,count,now=Date.now()){
+ if(!Number.isInteger(count)||count<1||count>periods.length)throw Error('Choose an available capture period.');
+ const period=periods.at(-count);if(!Number.isFinite(period.start)||period.start>now)throw Error('Capture period unavailable.');
+ return {start:new Date(Math.max(period.start,now-30*DAY)).toISOString(),end:new Date(now).toISOString(),estimated:!!period.estimated,retentionLimited:period.start<now-30*DAY};
+}
+// Normal delayed/provider coverage does not make an archive export fail.
+export function exportOutcome(report,uploadOutcome){
+ const c=report.coverage,issues=c.issues||[],emptyArchive=!c.events&&issues.includes('archive-not-found')&&!report.status?.lastReceipt&&!report.status?.capturePeriods?.length;
+ const scanFailed=!c.archiveScanComplete&&!(emptyArchive&&!issues.some(i=>/archive-read-unavailable|archive-list-limit|chunk-unavailable|duplicate-chunk|provider-read-interrupted|output-size-limit|page-limit|repeated-page-cursor/.test(i)));
+ return scanFailed||c.conflicts>0||uploadOutcome==='incomplete'||issues.includes('status-unavailable')?'incomplete':c.events?'ready':'empty';
+}
 export function activityQuery(job,now=Date.now()){
  const created=Date.parse(job.createdAt);if(!Number.isFinite(created)||created>now)throw Error('Activity creation time unavailable');
  return {start:new Date(Math.max(created-300000,now-31*DAY)).toISOString(),end:new Date(now).toISOString(),sources:[...SOURCES],jobId:job.id};

@@ -6,6 +6,7 @@ import {TelemetryOutbox,jobEvents,releaseEvent,repoEvents,workflowEvent} from '.
 import {WorkflowCollector,workflowIO} from './workflow-collector.js';
 import {probeWorkflow} from './telemetry-probe.js';
 import {workerRequestEvent} from './worker-telemetry.js';
+import {CaptureLifecycle} from './capture-lifecycle.js';
 import {measuredR2} from './r2-telemetry.js';
 const PREFIX='/_git/v1', RUN='/_git-runner/v1';
 const originOK=(env,url)=>String(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim()).includes(url.origin);
@@ -16,6 +17,10 @@ const internal=(e,path,method='GET',body)=>DO(e).fetch(new Request('https://inte
 // The second instance uses the existing binding but owns only its telemetry queue/alarm.
 const collector=(e,path,method='GET',body)=>e.JOBS.get(e.JOBS.idFromName('workspace-telemetry-b1')).fetch(new Request('https://internal/collector/'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)}));
 const poller=(e,path,method='GET',body)=>e.JOBS.get(e.JOBS.idFromName('workspace-workflow-poller-b2')).fetch(new Request('https://internal/workflow-poller/'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)}));
+// Independent lifecycle alarm remains active after the browser and job runner close.
+const capture=(e,action,body)=>e.JOBS.get(e.JOBS.idFromName('workspace-capture-v1')).fetch(new Request('https://internal/capture/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+const captureSession=(req,url)=>({origin:url.origin,cookie:(req.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('__Host-pwa_profile_session='))||''});
+async function enrollJob(env,req,url,id){try{const r=await capture(env,'job-start',{session:captureSession(req,url),id});if(!r.ok)return 'Automatic telemetry could not start';const state=await r.json();if(!state.enabled)return 'Automatic telemetry could not start';return null;}catch{return 'Automatic telemetry could not start';}}
 function defer(ctx,work){if(ctx?.waitUntil)ctx.waitUntil(Promise.resolve().then(work).catch(()=>console.warn('git-telemetry','capture-unavailable')));}
 async function enqueue(env,capability,items){if(!capability||!items.length)return;for(let i=0;i<items.length;i+=64){const r=await collector(env,'enqueue','POST',{capability,items:items.slice(i,i+64)});if(!r.ok)throw Error('Telemetry enqueue failed');}}
 function observe(ctx,env,items){if(!items.length)return;defer(ctx,async()=>{const r=await internal(env,'/telemetry-authority');if(r.ok)await enqueue(env,(await r.json()).capability,items);});}
@@ -38,6 +43,17 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
  if(!p.startsWith(PREFIX+'/'))return await env.ASSETS.fetch(req);
  if(!await identity(req,env))return fail('Connect the authorized Google account to use Git Manager',401);
  const path=p.slice(PREFIX.length);
+ if(path==='/telemetry/lifecycle'&&(req.method==='GET'||req.method==='POST')){
+  if(req.method==='POST'&&(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked))return fail('Administrator unlock and same-origin CSRF header required',403);
+  const action=req.method==='GET'?'status':(await req.json()).action;if(!['status','enable','disable','flush'].includes(action))return fail('Invalid telemetry control');
+  return capture(env,action,{session:captureSession(req,url)});
+ }
+ // A previously cached frontend must not bypass job ownership when toggling.
+ if(ctx&&req.method==='POST'&&['/telemetry/enable','/telemetry/disable'].includes(path)){
+  if(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked)return fail('Administrator unlock and same-origin CSRF header required',403);
+  const r=await capture(env,path.endsWith('/enable')?'enable':'disable',{session:captureSession(req,url)});if(!r.ok)return r;
+  return json(await r.json());
+ }
  if(path==='/telemetry/query'&&req.method==='POST'){
   if(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked)return fail('Administrator unlock and same-origin CSRF header required',403);
   try{const text=await req.text();if(text.length>4096)return fail('Invalid telemetry query',400);const q=JSON.parse(text);if(!q||typeof q!=='object'||Array.isArray(q))return fail('Invalid telemetry query',400);
@@ -79,13 +95,13 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
      const stopped=await poller(env,'stop','POST',{capability:oldCapability});if(!stopped.ok)throw Error('collector pause');
      const r=await internal(env,'/telemetry-authority','DELETE');if(!r.ok)throw Error('authority cleanup');
      if(oldCapability){const cleared=await collector(env,'clear','POST',{capability:oldCapability});if(!cleared.ok)throw Error('producer cleanup');}
-     const {capability,...safe}=final;return json({...safe,producer:outbox,workflowCollector:await stopped.json(),authorityConfigured:false});
+     const {capability,controlCapability,...safe}=final;return json({...safe,producer:outbox,workflowCollector:await stopped.json(),authorityConfigured:false});
     }catch{return fail('Telemetry shutdown did not complete. Pending records are retained where authorized; check status and retry disabling.',503);}
     finally{try{await collector(env,'shutdown-end','POST',{});}catch{}}
    }
    if(action==='flush'&&ctx)try{const r=await collector(env,'flush','POST',{});if(r.ok)outbox=await r.json();}catch{}
    const data=await env.PROFILES.telemetrySession(url.origin,profileCookie,action==='poll'?'status':action);if(!data||data.error)return fail('Telemetry archive unavailable. Check Profiles Worker deployment and Google connection.',503);
-   const {capability,...status}=data;if(action==='enable'){if(typeof capability!=='string')return fail('Telemetry authorization unavailable',503);
+   const {capability,controlCapability,...status}=data;if(action==='enable'){if(typeof capability!=='string')return fail('Telemetry authorization unavailable',503);
    const r=await internal(env,'/telemetry-authority','POST',{capability});if(!r.ok)return fail('Could not store telemetry authority; retry enabling',503);if(ctx){try{const rr=await collector(env,'enqueue','POST',{capability,items:[]});if(!rr.ok)console.warn('telemetry-authority','queue-refresh-deferred');}catch{}}}
    if(action==='status'&&ctx)try{const r=await collector(env,'status');if(r.ok)outbox=await r.json();}catch{}
    let authorityConfigured=null; if(ctx)try{const r=await internal(env,'/telemetry-authority');if(r.ok)authorityConfigured=!!(await r.json()).capability;}catch{}
@@ -124,12 +140,12 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
   const [, ,name,,action]=path.split('/');const rt=await readToken(env);if(!(await installed(env,rt)).some(r=>r.name===name))return fail('Repository not installed',404);if(action==='reconcile'&&name!=='AppLauncher')return fail('Only AppLauncher has the central reconciliation workflow');const t=await token(env,{actions:'write',metadata:'read'},[name]);const workflow=action==='tags'?'tag-main.yml':'validate-production.yml';await gh(t,repoRoute(env,name)+'/actions/workflows/'+workflow+'/dispatches',{method:'POST',body:{ref:'main'}});return json({accepted:true});
  }
  if(req.method==='POST'&&path==='/exports'){
-  const spec=await req.json(),t=await readToken(env),repos=await installed(env,t),names=[...new Set(spec.repositories||[])];if(!names.length||names.length>16||names.some(n=>!repos.some(r=>r.name===n))||!['lightweight','recursive','bundle'].includes(spec.format))return fail('Invalid export request');const id=crypto.randomUUID();measurement.jobId=id;return await internal(env,'/jobs','POST',{id,mode:'export',plan:{schema:1,title:'Repository export',updates:[]},exportSpec:{repositories:names,format:spec.format},start:spec.start===true});
+  const spec=await req.json(),t=await readToken(env),repos=await installed(env,t),names=[...new Set(spec.repositories||[])];if(!names.length||names.length>16||names.some(n=>!repos.some(r=>r.name===n))||!['lightweight','recursive','bundle'].includes(spec.format))return fail('Invalid export request');const id=crypto.randomUUID();measurement.jobId=id;const captureIssue=spec.start===true?await enrollJob(env,req,url,id):null;return await internal(env,'/jobs','POST',{id,captureIssue,mode:'export',plan:{schema:1,title:'Repository export',updates:[]},exportSpec:{repositories:names,format:spec.format},start:spec.start===true});
  }
  if(req.method==='POST'&&path==='/jobs'){
   const n=Number(req.headers.get('Content-Length')||0);if(n>MAX_UPLOAD+128*1024)return fail('Upload exceeds 12 MiB',413);const form=await req.formData(),file=form.get('upload');if(!file||typeof file.arrayBuffer!=='function'||file.size>MAX_UPLOAD)return fail('Upload missing or exceeds 12 MiB',413);const t=await readToken(env),repos=await installed(env,t);const mode=String(form.get('mode'));if(!['direct','pr','dry'].includes(mode))return fail('Invalid publish mode');const plan=normalizePlan(JSON.parse(String(form.get('plan'))),repos.map(r=>r.name),mode);if(mode==='dry'&&plan.updates.some(u=>u.dependsOn.length))return fail('Dry runs with unpublished inter-repository pins are not supported; use single-repository dry runs');const id=crypto.randomUUID();measurement.jobId=id;const bytes=await file.arrayBuffer(),sha256=await digest(bytes);await measuredR2(env.PACKAGES,'write',[id+'/upload',bytes],event=>observe(ctx,env,[event]));const r=await internal(env,'/jobs','POST',{id,plan,mode,sha256,filename:String(file.name||'upload').slice(0,200)});if(!r.ok)await measuredR2(env.PACKAGES,'delete',[id+'/upload'],event=>observe(ctx,env,[event]));return r;
  }
- if(req.method==='POST'&&/^\/jobs\/[0-9a-f-]{36}\/(start|resume|cancel)$/.test(path))return await internal(env,path,'POST',{});
+ if(req.method==='POST'&&/^\/jobs\/[0-9a-f-]{36}\/(start|resume|cancel)$/.test(path)){const [, ,id,action]=path.split('/');let captureIssue=null;if(action!=='cancel'){const r=await internal(env,'/jobs/'+id);if(!r.ok)return r;const j=await r.json();if(action==='start'&&j.status==='draft'||action==='resume'&&['paused','failed','awaiting-pr','running'].includes(j.status))captureIssue=await enrollJob(env,req,url,id);}return await internal(env,path,'POST',{captureIssue});}
  return fail('Unknown mutation',404);
  }catch(e){console.error('git-manager',String(e.message).slice(0,200));return fail(String(e.message||e).slice(0,300),502);}}
 export default {async fetch(req,env,ctx){const started=Date.now(),measurement={};const response=await handleRequest(req,env,ctx,measurement);try{const event=workerRequestEvent(measurement.path,response.status,started,Date.now(),measurement.jobId);if(event)observe(ctx,env,[event]);}catch{}return response;}};
@@ -147,14 +163,24 @@ export class JobCoordinator {
    const done=j.mode==='export'?(j.status==='completed'?total:previous?.done||0):j.index||0;
    j.progress={phase:j.status,note:j.status==='completed'?(j.mode==='export'?'Workspace archive completed':j.mode==='dry'?'Validation completed':'Update completed; automation settled'):j.status==='cancelled'?'Remaining work cancelled; published commits retained':'Execution failed; inspect error and runner logs',done,total,at:new Date().toISOString()};j.retryAt=null;
   }
-  let capability,before;try{capability=await this.s.get('telemetry:authority');if(capability)before=await this.s.get('job:'+j.id);}catch{}j.updatedAt=new Date().toISOString();await this.s.put('job:'+j.id,j);if(capability)try{const events=jobEvents(before,j);defer(this.ctx,()=>enqueue(this.env,capability,events));}catch{}}
+  let capability,before,events=[];try{capability=await this.s.get('telemetry:authority');if(capability)before=await this.s.get('job:'+j.id);}catch{}j.updatedAt=new Date().toISOString();if(capability)try{events=jobEvents(before,j);if(['completed','cancelled'].includes(j.status)&&events.length)j.terminalCaptureEvents=events;}catch{}await this.s.put('job:'+j.id,j);if(capability&&events.length)defer(this.ctx,()=>enqueue(this.env,capability,events));}
  capture(items){defer(this.ctx,async()=>enqueue(this.env,await this.s.get('telemetry:authority'),items));}
  async release(j){if(await this.s.get('active')===j.id){await this.s.delete('active');if(this.s.deleteAlarm)await this.s.deleteAlarm();try{this.capture([releaseEvent(j)].filter(Boolean));}catch{}}}
  async watch(delay=120000){if(this.s.setAlarm)await this.s.setAlarm(Date.now()+delay);}
  // Alarms are independent of browser connections. Retry ONLY an explicitly
  // reported automation timeout. Never redispatch an ambiguous write/dispatch.
  workflowPoller(){return new WorkflowCollector(this.s,workflowIO(this.env,async()=>{const r=await internal(this.env,'/telemetry-authority');if(!r.ok)throw Error('authority-unavailable');return (await r.json()).capability;},async()=>{const r=await collector(this.env,'status');if(!r.ok)throw Error('outbox-unavailable');return r.json();},async(capability,items)=>{const r=await collector(this.env,'enqueue','POST',{capability,items,poll:true});return r.ok;},async()=>{const r=await internal(this.env,'/telemetry-run-links');if(!r.ok)throw Error('job-correlation-unavailable');return r.json();}));}
- alarm(){const p=this.queue.then(async()=>{if(await this.s.get('telemetry:workflow-poller-mode'))return this.workflowPoller().tick();if(await this.s.get('telemetry:collector-mode'))return new TelemetryOutbox(this.s,this.env.PROFILES).drain({preservePending:(await this.s.get('telemetry:shutdown-until')||0)>Date.now()});return this.observe();}).catch(async e=>{console.warn('Git Manager watchdog or telemetry alarm','retry');await this.watch();});this.queue=p.then(()=>{},()=>{});return p;}
+ captureLifecycle(){const env=this.env,checked=async r=>{r=await r;if(!r.ok)throw Error('Telemetry control unavailable');return r.json();};return new CaptureLifecycle(this.s,{
+  session:(s,a)=>env.PROFILES.telemetrySession(s.origin,s.cookie,a),control:(c,a)=>env.PROFILES.telemetryControl(c,a),append:(c,events)=>env.PROFILES.telemetryAppend(c,events),
+  job:async id=>{const r=await internal(env,'/jobs/'+id);if(r.ok)return r.json();if(r.status===409||r.status===404)return null;throw Error('Job status unavailable');},
+  bind:async c=>{await checked(internal(env,'/telemetry-authority','POST',{capability:c}));await checked(collector(env,'enqueue','POST',{capability:c,items:[]}));},
+  clear:async c=>{const a=await checked(internal(env,'/telemetry-authority'));if(a.capability===c)await checked(internal(env,'/telemetry-authority','DELETE'));await checked(collector(env,'clear','POST',{capability:c}));},
+  ensure:()=>checked(poller(env,'ensure','POST',{repair:true})),stop:c=>checked(poller(env,'stop','POST',{capability:c})),
+  producer:()=>checked(collector(env,'status')),collector:()=>checked(poller(env,'status')),
+  gate:on=>checked(collector(env,on?'shutdown-start':'shutdown-end','POST',{})),
+  drainProducer:async()=>{let p;for(let i=0;i<4;i++){p=await checked(collector(env,'shutdown-drain','POST',{}));if(!p.pending||p.failures)break;}return p;}
+ });}
+ alarm(){const p=this.queue.then(async()=>{if(await this.s.get('telemetry:capture-mode'))return this.captureLifecycle().tick();if(await this.s.get('telemetry:workflow-poller-mode'))return this.workflowPoller().tick();if(await this.s.get('telemetry:collector-mode'))return new TelemetryOutbox(this.s,this.env.PROFILES).drain({preservePending:(await this.s.get('telemetry:shutdown-until')||0)>Date.now()});return this.observe();}).catch(async e=>{console.warn('Git Manager watchdog or telemetry alarm','retry');await this.watch();});this.queue=p.then(()=>{},()=>{});return p;}
  async runState(a,jobId){const t=await readToken(this.env),run=await gh(t,repoRoute(this.env,this.env.CONTROLLER_REPO)+'/actions/runs/'+a.runId);try{this.capture([workflowEvent(this.env.CONTROLLER_REPO,run,Date.now(),{jobId,attemptId:a.id})].filter(Boolean));}catch{}return run;}
  async observe(){const active=await this.s.get('active');if(!active)return;const j=await this.get(active),a=j.attempt;
   if(j.status==='paused'&&j.retryAt){
@@ -181,6 +207,7 @@ export class JobCoordinator {
   return kept;
  }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
+  if(path.startsWith('/capture/')&&method==='POST'){await this.s.put('telemetry:capture-mode',true);const {session,id}=await req.json();return json(await this.captureLifecycle().request(path.split('/').at(-1),session,id));}
   if(path.startsWith('/workflow-poller/')){const poll=this.workflowPoller();if(path==='/workflow-poller/status'&&method==='GET')return json(await poll.status());if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:workflow-poller-mode',true);if(path==='/workflow-poller/ensure')return json(await poll.ensure(await req.json()));if(path==='/workflow-poller/scan')return json(await poll.scanNow());if(path==='/workflow-poller/stop')return json(await poll.stop(await req.json()));if(path==='/workflow-poller/paused-status')return json(await poll.pausedStatus((await req.json()).ownerHash));return fail('Unknown poller operation',404);}
   // Internal-only collector endpoints; the public route table never forwards these.
   if(path.startsWith('/collector/')){const box=new TelemetryOutbox(this.s,this.env.PROFILES);if(path==='/collector/status'&&method==='GET')return json(await box.status());if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:collector-mode',true);if(path==='/collector/shutdown-start'){const now=Date.now();if((await this.s.get('telemetry:shutdown-until')||0)>now)return fail('Shutdown busy',409);await this.s.put('telemetry:shutdown-until',now+300000);return json({ok:true});}if(path==='/collector/shutdown-end'){await this.s.delete('telemetry:shutdown-until');return json({ok:true});}if(path==='/collector/shutdown-drain')return json(await box.drain({preservePending:true}));if(path==='/collector/enqueue'){if((await this.s.get('telemetry:shutdown-until')||0)>Date.now())return fail('Telemetry shutdown in progress',409);const {capability,items,poll}=await req.json();if(poll&&(!Array.isArray(items)||items.length>64||(await box.status()).pending+items.length>80))return fail('Telemetry queue busy',409);if(capability!==(await box.state()).capability){const authority=await internal(this.env,'/telemetry-authority');if(!authority.ok||(await authority.json()).capability!==capability)return fail('Telemetry authority changed',409);}return json(await box.enqueue(capability,items)||{ok:false});}if(path==='/collector/probe-backoff'){await this.s.put('telemetry:probe-backoff',Date.now()+15*60000);return json({ok:true});}if(path==='/collector/probe-lease'){const now=Date.now(),last=await this.s.get('telemetry:probe-lease');if((await this.s.get('telemetry:probe-backoff')||0)>now||last&&now-last<60000)return fail('Diagnostic collection cooldown',429);await this.s.put('telemetry:probe-lease',now);return json({ok:true});}if(path==='/collector/flush')return json(await box.drain({manual:true}));if(path==='/collector/clear'){const {capability}=await req.json();await box.clear(capability);return json({ok:true});}return fail('Unknown collector operation',404);}
@@ -200,9 +227,9 @@ export class JobCoordinator {
   if(path==='/jobs'&&method==='GET'){return json(await this.history());}
   if(path==='/jobs'&&method==='POST'){const {start,...data}=await req.json();const j={...data,controller:this.env.CONTROLLER_REPO,status:'draft',index:0,records:[],retries:0,createdAt:new Date().toISOString()};if(start===true&&j.mode==='export')return json(await this.begin(j),201);await this.save(j);return json(j,201);}
   let m=/^\/jobs\/([0-9a-f-]{36})(?:\/(start|resume|cancel))?$/.exec(path);if(m){const j=await this.get(m[1]);if(method==='GET'&&!m[2])return json(j);if(method!=='POST')return fail('Method not allowed',405);
-   if(m[2]==='start'){if(j.status!=='draft')throw Error('Only draft jobs may be started');return json(await this.begin(j));}
+   if(m[2]==='start'){j.captureIssue=(await req.json()).captureIssue||null;if(j.status!=='draft')throw Error('Only draft jobs may be started');return json(await this.begin(j));}
    if(m[2]==='cancel'){if(!['draft','failed','paused','awaiting-pr','running'].includes(j.status))throw Error('Cannot cancel a completed job');if(j.status==='running'&&j.attempt?.writeIssued)throw Error('Publication credentials were issued. Wait for the runner to finish, then recover if necessary.');if(j.attempt?.writeIssued&&!j.records.some(r=>r.index===j.index))throw Error('Publication is uncertain; recover before cancelling');j.status='cancelled';j.retryAt=null;await this.save(j);await this.release(j);return json(j);}
-   if(m[2]==='resume')return json(await this.resume(j));
+   if(m[2]==='resume'){j.captureIssue=(await req.json()).captureIssue||null;return json(await this.resume(j));}
   }
   m=/^\/runner\/([0-9a-f-]{36})\/([0-9a-f-]{36})\/(claim|package|token|candidate|published|progress|finish)$/.exec(path);if(!m)return fail('Unknown job operation',404);const j=await this.get(m[1]),a=j.attempt,op=m[3];if(!a||a.id!==m[2]||j.status!=='running'||await this.s.get('active')!==j.id)return fail('Stale or inactive attempt',409);const data=method==='POST'?await req.json():{},runId=String(data.runId||req.headers.get('X-Run-ID')||'');
   if(!/^\d+$/.test(runId))return fail('Run ID required');if(op==='claim'){if(a.runId&&a.runId!==runId)return fail('Attempt already claimed',409);a.runId=runId;if(j.progress?.phase==='dispatch')j.progress={phase:'preparing',note:a.kind==='export'?'Runner connected; preparing archive':'Runner connected',at:new Date().toISOString()};await this.save(j);return json({id:j.id,attempt:a.id,kind:a.kind,index:j.index,mode:j.mode,update:j.plan.updates[j.index]||null,records:j.records,remaining:j.plan.updates.slice(j.index).map(u=>u.repository),exportSpec:j.exportSpec,sha256:j.sha256,filename:j.filename,owner:this.env.GITHUB_OWNER,controller:this.env.CONTROLLER_REPO});}
