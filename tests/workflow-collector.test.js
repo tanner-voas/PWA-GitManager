@@ -49,3 +49,7 @@ test('B2.1 actual authenticated Worker route invokes poller and forwards records
  const flushed=await worker.fetch(req('/telemetry/flush','POST'),env,ctx);assert.equal(flushed.status,200);assert.equal(forwarded.length,4);assert.deepEqual(forwarded.map(x=>x.operation),['workflow','job','step','step']);assert.equal((await flushed.json()).producer.pending,0);
  }finally{globalThis.fetch=original;}
 });
+test('manual and alarm collection evidence stays distinct across reconstruction',async()=>{
+ const x=setup();let a=await x.poll.scanNow(now);assert.equal(a.manualTicks,1);assert.equal(a.alarmTicks,0);assert.equal(a.lastTickTrigger,'manual');assert.deepEqual(a.lastDetailedRun,{repo:'PWA-GitRunner',id:'123',attempt:'2',records:3,truncated:false});
+ a=await new WorkflowCollector(x.s,x.io).tick(now+300000);assert.equal(a.manualTicks,1);assert.equal(a.alarmTicks,1);assert.equal(a.lastTickTrigger,'alarm');assert.equal(a.lastDetailedRun.repo,'Ciyan');
+});

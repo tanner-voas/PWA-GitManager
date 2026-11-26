@@ -5,7 +5,7 @@ import {gh,readToken,repoRoute} from './github.js';
 // per tick; no Actions dispatch, no publication lock, no raw provider payloads.
 const KEY='telemetry:workflow-poller', TICK=5*60000, INITIAL=60000, MANUAL=60000, LOOKBACK=DAY, MAX_PENDING=60, MAX_SEEN=400;
 const iso=t=>new Date(t).toISOString();
-const fresh=()=>({enabled:false,authorityHash:null,repos:[],cursor:0,pending:[],seen:{},runsSeen:{},lastManual:0,lastScan:null,lastRepo:null,lastDetail:null,lastError:null,failures:0,requests:0,scans:0,details:0,truncated:0,backpressure:0,unavailableDetails:0,lastTick:null,lastStage:null,lastAttemptRepo:null,lastRows:0,lastNewRuns:0,enqueued:0,detailFailures:0,lastDetailError:null,lastStatus:null,retryAt:null});
+const fresh=()=>({enabled:false,authorityHash:null,repos:[],cursor:0,pending:[],seen:{},runsSeen:{},lastManual:0,lastScan:null,lastRepo:null,lastDetail:null,lastError:null,failures:0,requests:0,scans:0,details:0,truncated:0,backpressure:0,unavailableDetails:0,lastTick:null,lastStage:null,lastAttemptRepo:null,lastRows:0,lastNewRuns:0,enqueued:0,detailFailures:0,lastDetailError:null,lastStatus:null,retryAt:null,alarmTicks:0,manualTicks:0,lastTickTrigger:null,expiredDetails:0,lastDetailedRun:null});
 const providerStatus=e=>{const m=/^GitHub (\d{3})\b/.exec(String(e?.message||''));return m?Number(m[1]):null;};
 const failureCode=e=>e.message==='archive-backpressure'?'archive-backpressure':e.message==='authority-unavailable'?'authority-unavailable':e.message==='outbox-unavailable'?'outbox-unavailable':e.message==='invalid-provider-response'?'invalid-provider-response':[401,403,429].includes(providerStatus(e))?'github-auth-or-rate-limit':'provider-unavailable';
 const retryDelay=(e,n)=>Math.max(Math.min(6*60*60000,TICK*2**Math.min(n,6)),Number(e.retryMs)||0);
@@ -39,10 +39,10 @@ export class WorkflowCollector{
  async scanNow(now=Date.now()){
   await this.ensure({now});const s=await this.state();
   if(!s.enabled||(s.failures&&(s.retryAt||await this.s.getAlarm?.()||0)>now)||(s.lastManual&&now-s.lastManual<MANUAL))return this.status();
-  s.lastManual=now;await this.s.put(KEY,s);return this.tick(now);
+  s.lastManual=now;await this.s.put(KEY,s);return this.tick(now,'manual');
  }
  async stop(){await this.s.put(KEY,fresh());await this.s.deleteAlarm?.();return this.status();}
- async tick(now=Date.now()){
+ async tick(now=Date.now(),trigger='alarm'){
   let s=await this.state();if(!s.enabled)return this.status();if(s.retryAt>now){await this.arm(s.retryAt-now,now);return this.status();}let delay=TICK;
   // Arm a recovery tick before external work, so a terminated invocation does not silently stop collection.
   await this.arm(TICK,now);
@@ -50,7 +50,7 @@ export class WorkflowCollector{
    s.lastTick=now;s.lastStage='authority';s.lastStatus=null;await this.s.put(KEY,s);
    const cap=await this.io.authority();if(!cap){s.enabled=false;s.lastError='authorization-revoked';await this.s.put(KEY,s);await this.s.deleteAlarm?.();return this.status();}
    const hash=await hex(enrollmentIdentity(cap)||cap);const changed=hash!==s.authorityHash&&await hex(cap)!==s.authorityHash;if(!changed)s.authorityHash=hash;if(changed){s={...fresh(),enabled:true,authorityHash:hash,lastManual:s.lastManual};}
-   s.lastTick=now;s.lastStage='queue';await this.s.put(KEY,s);const q=await this.io.queueStatus();if(!changed&&q.lastError==='authorization-revoked'&&!q.configured){s.enabled=false;s.lastError='authorization-revoked';await this.s.put(KEY,s);await this.s.deleteAlarm?.();return this.status();}
+   s.lastTick=now;s.lastTickTrigger=trigger;if(trigger==='manual')s.manualTicks++;else s.alarmTicks++;s.lastStage='queue';await this.s.put(KEY,s);const q=await this.io.queueStatus();if(!changed&&q.lastError==='authorization-revoked'&&!q.configured){s.enabled=false;s.lastError='authorization-revoked';await this.s.put(KEY,s);await this.s.deleteAlarm?.();return this.status();}
    // Reserve room for the poller's bounded batch and for live job events.
    if(q.pending>32||(q.pending>0&&q.failures>0)){s.backpressure++;s.lastStage='backpressure';await this.s.put(KEY,s);await this.arm(delay,now);return this.status();}
    s.lastStage='token';s.requests++;await this.s.put(KEY,s);const t=await this.io.readToken();const get=async path=>{s.requests++;await this.s.put(KEY,s);return this.io.get(t,path);};
@@ -59,7 +59,7 @@ export class WorkflowCollector{
    const repo=s.repos[s.cursor];s.lastAttemptRepo=repo||null;s.lastRows=0;s.lastNewRuns=0;let entries=[],observed=[];
    if(repo){s.lastStage='workflows';const data=await get(this.io.route(repo)+'/actions/runs?per_page=20');if(!Array.isArray(data?.workflow_runs))throw Error('invalid-provider-response');const rows=data.workflow_runs.slice(0,20);s.lastRows=rows.length;if(Number(data.total_count)>20&&rows.length===20&&Date.parse(rows.at(-1).updated_at)>=now-LOOKBACK)s.truncated++;
     for(const r of rows){if(Date.parse(r.updated_at||r.created_at)<now-LOOKBACK)continue;const event=workflowEvent(repo,r,now);if(!event)continue;if(!s.runsSeen[event.key]){event.event.eventId=await stableId(event.key);entries.push(event);observed.push(event.key);}if(r.status!=='completed'||!numericId(r.run_attempt))continue;const item={repo,id:String(r.id),attempt:String(r.run_attempt),commit:event.event.correlation.commit,updatedAt:r.updated_at,failed:r.conclusion==='failure'||r.conclusion==='timed_out'};if(!s.seen[key(item)]&&!s.pending.some(p=>key(p)===key(item)))s.pending.push(item);}
-    s.pending=s.pending.filter(x=>Date.parse(x.updatedAt)>=now-2*DAY);s.pending.sort((a,b)=>Number(b.failed)-Number(a.failed)||Date.parse(b.updatedAt)-Date.parse(a.updatedAt));if(s.pending.length>MAX_PENDING){s.truncated+=s.pending.length-MAX_PENDING;s.pending=s.pending.slice(0,MAX_PENDING);} }
+    const pendingBefore=s.pending.length;s.pending=s.pending.filter(x=>Date.parse(x.updatedAt)>=now-2*DAY);s.expiredDetails+=pendingBefore-s.pending.length;s.pending.sort((a,b)=>Number(b.failed)-Number(a.failed)||Date.parse(b.updatedAt)-Date.parse(a.updatedAt));if(s.pending.length>MAX_PENDING){s.truncated+=s.pending.length-MAX_PENDING;s.pending=s.pending.slice(0,MAX_PENDING);} }
    // Commit discovered runs independently of optional job details. A single
    // denied/malformed detail response must not block the repository cursor.
    s.lastNewRuns=observed.length;
@@ -74,7 +74,7 @@ export class WorkflowCollector{
    if(item){try{s.lastStage='job-details';const d=await get(this.io.route(item.repo)+`/actions/runs/${item.id}/attempts/${item.attempt}/jobs?per_page=20`);detail=await jobDetailEvents(item,d,now);
     const records=detail.entries.slice();if(detail.truncated){const event=createEvent('github-actions','job',{eventId:await stableId(`truncated:${key(item)}`),kind:'snapshot',provenance:'provider',severity:'warning',coverage:'truncated',outcome:'unknown',correlation:{repo:item.repo,workflowRunId:item.id,runAttempt:item.attempt},metrics:{count:detail.entries.length}},now);records.push({event,key:`run:${key(item)}:truncated`});}
     s.lastStage='enqueue-details';if(records.length&&!await this.io.enqueue(cap,records))throw Error('archive-backpressure');s.enqueued+=records.length;
-    s.pending=s.pending.filter(x=>key(x)!==key(item));s.seen[key(item)]=now;s.details++;s.lastDetail=now;s.lastDetailError=null;if(detail.truncated)s.truncated++;
+    s.pending=s.pending.filter(x=>key(x)!==key(item));s.seen[key(item)]=now;s.details++;s.lastDetail=now;s.lastDetailedRun={repo:item.repo,id:item.id,attempt:item.attempt,records:records.length,truncated:detail.truncated};s.lastDetailError=null;if(detail.truncated)s.truncated++;
    }catch(e){detailError=e;s.detailFailures++;s.lastDetailError=failureCode(e);s.lastStatus=providerStatus(e);item.failures=(item.failures||0)+(e.message==='archive-backpressure'?0:1);
     if(providerStatus(e)===404||item.failures>=4){s.pending=s.pending.filter(x=>key(x)!==key(item));s.truncated++;s.unavailableDetails++;s.seen[key(item)]=now;}
     else item.retryAt=now+retryDelay(e,Math.max(1,item.failures));

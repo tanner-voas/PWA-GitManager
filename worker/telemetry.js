@@ -2,7 +2,7 @@ import {createEvent,sanitizeEvent,DAY} from './telemetry-schema.js';
 // Separate instance of the existing SQLite DO class. No new binding/migration,
 // no job watchdog alarm or active-job lock is shared with the telemetry spool.
 const KEY='telemetry:outbox', LIMIT=96, BATCH=32, FIRST=60000, TTL=2*DAY;
-const empty=()=>({capability:null,queue:[],observations:{},sent:0,dropped:0,failures:0,lastError:null,lastSent:null,lastManual:0});
+const empty=()=>({capability:null,queue:[],observations:{},sent:0,dropped:0,failures:0,lastError:null,lastSent:null,lastAcknowledgement:null,lastManual:0});
 const stamp=n=>new Date(n).toISOString();
 // For queue continuity only: both inputs originate from trusted server RPC/storage.
 // The Profiles service still verifies the signed capability on every append.
@@ -40,19 +40,20 @@ export function workflowEvent(repo,r,now=Date.now(),correlation={}){
  const end=Date.parse(r.updated_at),start=Date.parse(r.run_started_at||r.created_at),at=completed?end:start;
  if(Number.isFinite(at)&&at<now-30*DAY)return null;
  const e=createEvent('github-actions','workflow',{kind:'snapshot',provenance:'provider',coverage:'partial',occurredAt:Number.isFinite(at)&&at<=now+300000&&at>=now-30*DAY?stamp(at):stamp(now),observedAt:stamp(now),outcome,severity:outcome==='failed'?'error':'info',correlation:{...correlation,repo,commit:r.head_sha,workflowRunId:String(r.id),runAttempt:r.run_attempt==null?undefined:String(r.run_attempt)},metrics:{durationMs:completed&&Number.isFinite(end)&&Number.isFinite(start)&&end>=start?end-start:undefined}},now);
- return e?.correlation?.repo?{event:e,key:`run:${repo}:${r.id}:${r.run_attempt||0}:${r.status}:${r.conclusion||''}`}:null;
+ const scope=e?.correlation?.jobId?`:job:${e.correlation.jobId}:${e.correlation.attemptId||''}`:'';
+ return e?.correlation?.repo?{event:e,key:`run:${repo}:${r.id}:${r.run_attempt||0}:${r.status}:${r.conclusion||''}${scope}`}:null;
 }
 const fingerprint=e=>JSON.stringify([e.source,e.operation,e.outcome,e.appVersion,e.correlation?.repo,e.correlation?.commit,e.correlation?.workflowRunId,e.correlation?.runAttempt,e.metrics]);
 const priority=e=>e.severity==='error'||['finish','cancel'].includes(e.operation);
 export class TelemetryOutbox{
  constructor(storage,profiles){this.s=storage;this.profiles=profiles;}
  async state(){return {...empty(),...await this.s.get(KEY)};}
- async status(){const m=await this.state();return {configured:!!m.capability,pending:m.queue.length,sent:m.sent,dropped:m.dropped,failures:m.failures,lastError:m.lastError,lastSent:m.lastSent,alarmAt:await this.s.getAlarm?.()??null};}
+ async status(){const m=await this.state();return {configured:!!m.capability,pending:m.queue.length,sent:m.sent,dropped:m.dropped,failures:m.failures,lastError:m.lastError,lastSent:m.lastSent,lastAcknowledgement:m.lastAcknowledgement,alarmAt:await this.s.getAlarm?.()??null};}
  async arm(m,delay=FIRST){if(!m.capability||!m.queue.length)return;const at=Date.now()+delay,old=await this.s.getAlarm?.();if(old==null||old>at)await this.s.setAlarm(at);}
  async clear(capability){const m=await this.state();if(!sameEnrollment(capability,m.capability))return;await this.s.put(KEY,{...empty(),sent:m.sent,dropped:m.dropped+m.queue.length});await this.s.deleteAlarm?.();}
  async enqueue(capability,items,now=Date.now()){
   if(typeof capability!=='string'||!capability||capability.length>4096||!Array.isArray(items)||items.length>64)return;
-  let m=await this.state();if(m.capability!==capability){if(sameEnrollment(m.capability,capability)){m.capability=capability;m.failures=0;m.lastError=null;}else m={...empty(),capability,sent:m.sent,dropped:m.dropped+m.queue.length};}
+  let m=await this.state();if(m.capability!==capability){if(sameEnrollment(m.capability,capability)){m.capability=capability;}else m={...empty(),capability,sent:m.sent,dropped:m.dropped+m.queue.length};}
   for(const item of items){const event=sanitizeEvent(item.event||item,{now});if(!event){m.dropped++;continue;}const key=typeof item.key==='string'&&/^(repo|run):[A-Za-z0-9_.:-]{1,180}$/.test(item.key)?item.key:null,fp=fingerprint(event);if(key&&m.observations[key]?.fp===fp&&now-m.observations[key].at<(key.startsWith('run:')?30*DAY:DAY))continue;
    if(m.queue.some(x=>x.eventId===event.eventId))continue;
    if(m.queue.length>=LIMIT){const victim=m.queue.findIndex(x=>!priority(x));if(victim<0||!priority(event)){m.dropped++;continue;}m.queue.splice(victim,1);m.dropped++;}
@@ -67,7 +68,7 @@ export class TelemetryOutbox{
   const stale=m.queue.filter(e=>Date.parse(e.occurredAt)<now-TTL&&Date.parse(e.observedAt||e.occurredAt)<now-TTL);m.dropped+=stale.length;m.queue=m.queue.filter(e=>!stale.includes(e));
   if(!m.queue.length){await this.s.put(KEY,m);await this.s.deleteAlarm?.();return this.status();}
   const batch=m.queue.slice(0,BATCH);let r;try{r=await this.profiles.telemetryAppend(m.capability,batch);}catch{}
-  if(r&&Number.isInteger(r.accepted)&&Number.isInteger(r.duplicates)&&r.accepted>=0&&r.duplicates>=0&&r.accepted+r.duplicates===batch.length&&!r.rejected){m.queue.splice(0,batch.length);m.sent+=batch.length;m.failures=0;m.lastError=null;m.lastSent=now;}
+  if(r&&Number.isInteger(r.accepted)&&Number.isInteger(r.duplicates)&&r.accepted>=0&&r.duplicates>=0&&r.accepted+r.duplicates===batch.length&&!r.rejected){m.queue.splice(0,batch.length);m.sent+=batch.length;m.failures=0;m.lastError=null;m.lastSent=now;m.lastAcknowledgement={at:stamp(now),count:batch.length,accepted:r.accepted,duplicates:r.duplicates,sources:[...new Set(batch.map(e=>e.source))].sort(),runs:[...new Set(batch.filter(e=>e.correlation?.workflowRunId).map(e=>`${e.correlation.repo||'unknown'}:${e.correlation.workflowRunId}`))].sort()};}
   else if(r?.error==='Telemetry capability revoked'||r?.error==='Telemetry capability expired or invalid'){m.dropped+=m.queue.length;m.queue=[];m.capability=null;m.lastError='authorization-revoked';m.failures++;m.observations={};}
   else{m.failures++;m.lastError='sink-unavailable-or-full';}
   await this.s.put(KEY,m);await this.s.deleteAlarm?.();await this.arm(m,m.failures?Math.min(15*FIRST,FIRST*2**Math.min(m.failures,4)):FIRST);return this.status();

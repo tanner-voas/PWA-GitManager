@@ -32,7 +32,7 @@ async function repositoryView(req,env,url,path,ctx){const t=await readToken(env)
 }
 export default {async fetch(req,env,ctx){try{const url=new URL(req.url),p=url.pathname;
  if(p.startsWith('/_profiles/'))return await env.PROFILES.fetch(req);
- if(p.startsWith(RUN+'/')){if(!runnerOK(req,env))return fail('Runner unauthorized',401);const m=new RegExp('^'+RUN+'/([0-9a-f-]{36})/([0-9a-f-]{36})/(claim|package|token|candidate|published|progress|finish)$').exec(p);if(!m)return fail('Unknown runner route',404);const [,id,attempt,op]=m;const data=req.method==='POST'?await req.json():{};const check=await internal(env,`/runner/${id}/${attempt}/${op}`,req.method,data);if(!check.ok||op!=='package'&&op!=='token')return check;const assignment=await check.json();if(op==='package'){const object=await measuredR2(env.PACKAGES,'read',[id+'/upload'],event=>observe(ctx,env,[event]));return object?new Response(object.body,{headers:{'Content-Type':'application/octet-stream','Cache-Control':'no-store'}}):fail('Package expired',404);}const perms=data.write?{contents:'write',pull_requests:'write',workflows:'write',metadata:'read'}:{contents:'read',actions:'read',pull_requests:'read',metadata:'read'};return json({token:await token(env,perms,data.write?[assignment.repository]:undefined)});}
+ if(p.startsWith(RUN+'/')){if(!runnerOK(req,env))return fail('Runner unauthorized',401);const m=new RegExp('^'+RUN+'/([0-9a-f-]{36})/([0-9a-f-]{36})/(claim|package|token|candidate|published|progress|finish)$').exec(p);if(!m)return fail('Unknown runner route',404);const [,id,attempt,op]=m;const data=req.method==='POST'?await req.json():{};const check=await internal(env,`/runner/${id}/${attempt}/${op}`,req.method,data);if(!check.ok||op!=='package'&&op!=='token')return check;const assignment=await check.json();if(op==='package'){const object=await measuredR2(env.PACKAGES,'read',[id+'/upload'],event=>observe(ctx,env,[{...event,correlation:{...event.correlation,attemptId:attempt}}]));return object?new Response(object.body,{headers:{'Content-Type':'application/octet-stream','Cache-Control':'no-store'}}):fail('Package expired',404);}const perms=data.write?{contents:'write',pull_requests:'write',workflows:'write',metadata:'read'}:{contents:'read',actions:'read',pull_requests:'read',metadata:'read'};return json({token:await token(env,perms,data.write?[assignment.repository]:undefined)});}
  if(!p.startsWith(PREFIX+'/'))return await env.ASSETS.fetch(req);
  if(!await identity(req,env))return fail('Connect the authorized Google account to use Git Manager',401);
  const path=p.slice(PREFIX.length);
@@ -103,7 +103,14 @@ export class JobCoordinator {
  constructor(ctx,env){this.ctx=ctx;this.s=ctx.storage;this.env=env;this.queue=Promise.resolve();this.dispatch=(id,attempt)=>dispatch(env,id,attempt);}
  fetch(req){const p=this.queue.then(()=>this.route(req)).catch(e=>fail(String(e.message||e).slice(0,300),409));this.queue=p.then(()=>{},()=>{});return p;}
  async get(id){const j=await this.s.get('job:'+id);if(!j)throw Error('Job not found');return j;}
- async save(j){let capability,before;try{capability=await this.s.get('telemetry:authority');if(capability)before=await this.s.get('job:'+j.id);}catch{}j.updatedAt=new Date().toISOString();await this.s.put('job:'+j.id,j);if(capability)try{const events=jobEvents(before,j);defer(this.ctx,()=>enqueue(this.env,capability,events));}catch{}}
+ async save(j){
+  if(['completed','cancelled','failed'].includes(j.status)&&j.progress?.phase!==j.status){
+   const previous=j.progress;if(previous)j.lastIntermediateProgress=previous;
+   const total=j.mode==='export'?j.exportSpec?.repositories?.length||0:j.plan?.updates?.length||0;
+   const done=j.mode==='export'?(j.status==='completed'?total:previous?.done||0):j.index||0;
+   j.progress={phase:j.status,note:j.status==='completed'?(j.mode==='export'?'Workspace archive completed':j.mode==='dry'?'Validation completed':'Update completed; automation settled'):j.status==='cancelled'?'Remaining work cancelled; published commits retained':'Execution failed; inspect error and runner logs',done,total,at:new Date().toISOString()};j.retryAt=null;
+  }
+  let capability,before;try{capability=await this.s.get('telemetry:authority');if(capability)before=await this.s.get('job:'+j.id);}catch{}j.updatedAt=new Date().toISOString();await this.s.put('job:'+j.id,j);if(capability)try{const events=jobEvents(before,j);defer(this.ctx,()=>enqueue(this.env,capability,events));}catch{}}
  capture(items){defer(this.ctx,async()=>enqueue(this.env,await this.s.get('telemetry:authority'),items));}
  async release(j){if(await this.s.get('active')===j.id){await this.s.delete('active');if(this.s.deleteAlarm)await this.s.deleteAlarm();try{this.capture([releaseEvent(j)].filter(Boolean));}catch{}}}
  async watch(delay=120000){if(this.s.setAlarm)await this.s.setAlarm(Date.now()+delay);}

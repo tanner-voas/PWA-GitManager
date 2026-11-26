@@ -59,3 +59,12 @@ test('public cannot read collector or authority endpoints; telemetry failure can
  for(const path of ['/collector/status','/telemetry-authority'])assert.equal((await worker.fetch(new Request(origin+'/_git/v1'+path),env)).status,404);
  const pending=[],c=new JobCoordinator({storage:new Storage(),waitUntil:p=>pending.push(p)},env);await c.s.put('telemetry:authority',cap);await c.save(job);await Promise.all(pending);assert.equal((await c.get(id)).status,'draft');
 });
+test('generic workflow cannot suppress job-correlated observation',async()=>{
+ const s=new Storage(),box=new TelemetryOutbox(s,{telemetryAppend:ok});const run={id:234,run_attempt:2,status:'completed',conclusion:'success',head_sha:sha,created_at:dt,updated_at:new Date(now).toISOString()};
+ const generic=()=>workflowEvent('PWA-GitRunner',run,now),correlated=()=>workflowEvent('PWA-GitRunner',run,now,{jobId:id,attemptId:attempt});
+ await box.enqueue(cap,[generic(),correlated(),generic(),correlated()],now);assert.equal((await box.status()).pending,2);assert.equal((await box.state()).queue[1].correlation.jobId,id);
+ await box.drain({now});const a=(await box.status()).lastAcknowledgement;assert.equal(a.count,2);assert.deepEqual(a.runs,['PWA-GitRunner:234']);assert.deepEqual(a.sources,['github-actions']);assert.equal(a.accepted+a.duplicates,2);
+});
+test('terminal progress reflects outcome and preserves intermediate evidence',async()=>{
+ const c=new JobCoordinator({storage:new Storage()},{});for(const status of ['completed','failed','cancelled']){const j={...structuredClone(claimed),status,index:status==='completed'?1:0,retryAt:123};await c.save(j);assert.equal(j.progress.phase,status);assert.equal(j.progress.done,j.index);assert.equal(j.progress.total,1);assert.equal(j.retryAt,null);assert.equal(j.lastIntermediateProgress.phase,'preparing');await c.save(j);assert.equal(j.lastIntermediateProgress.phase,'preparing');}
+});
