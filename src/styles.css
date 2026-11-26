@@ -51,3 +51,8 @@ body:has(.gm) #app.app-frame{padding-inline:0;padding-bottom:0;width:min(100%,90
 
 /* R8.1: one compact capture-period stepper; actions remain vertically stacked. */
 .gm .gm-period-counter{display:grid;grid-template-columns:48px minmax(0,1fr) 48px;gap:8px;align-items:center}.gm .gm-period-counter input{text-align:center;margin:0;appearance:textfield}.gm .gm-period-counter input::-webkit-inner-spin-button,.gm .gm-period-counter input::-webkit-outer-spin-button{appearance:none;margin:0}.gm [hidden]{display:none!important}
+
+/* R9: compact time shortcuts; native iOS date input intrinsic width must not overflow. */
+.gm-quick-ranges{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:8px 0}.gm .gm-quick-ranges button{min-width:0;padding:9px 3px;white-space:nowrap;font-size:clamp(12px,3.4vw,15px)}
+.gm #gm-time-range,.gm #gm-time-range label{min-width:0;max-width:100%;width:100%}.gm #gm-time-range input[type=datetime-local]{display:block;box-sizing:border-box;width:100%;min-width:0;max-width:100%;-webkit-appearance:none;appearance:none}.gm #gm-time-range input::-webkit-date-and-time-value{min-width:0;text-align:left}
+.gm-busy-card progress{width:100%;accent-color:#244d65}.gm-busy-card button{font:inherit;width:100%;border:1px solid #d7dfdf;border-radius:9px;padding:10px;background:transparent;color:inherit;cursor:pointer;touch-action:manipulation}

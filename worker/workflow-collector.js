@@ -55,7 +55,8 @@ export class WorkflowCollector{
   else if(!s.enabled&&s.lastError!=='authorization-revoked')s.enabled=true;
   if(!s.enabled)return this.status();const old=await this.s.getAlarm?.();if(manual&&(!s.lastManual||now-s.lastManual>=MANUAL)&&!s.failures&&!(s.retryAt>now)){s.lastManual=now;await this.arm(1000,now);}else if(old==null)await this.arm(Math.max(INITIAL,(s.retryAt||0)-now),now);await this.save(s);return this.status();}
  async scanNow(now=Date.now()){
-  await this.ensure({now});const s=await this.state();
+  // A manual scan must never reopen a paused capture.
+  const s=await this.state();
   if(!s.enabled||(s.failures&&(s.retryAt||await this.s.getAlarm?.()||0)>now)||(s.lastManual&&now-s.lastManual<MANUAL))return this.status();
   s.lastManual=now;await this.save(s);return this.tick(now,'manual');
  }

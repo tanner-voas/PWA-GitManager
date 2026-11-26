@@ -2,6 +2,7 @@ export const SOURCES=['google-drive','git-manager','git-runner','github-actions'
 export const MAX_PAGES=20,MAX_EVENTS=10240,MAX_BYTES=8*1024*1024;
 const DAY=86400000;
 export function localInput(ms,utc=false){const d=new Date(ms);return new Date(ms-(utc?0:d.getTimezoneOffset()*60000)).toISOString().slice(0,19);}
+export function quickRange(minutes,now=Date.now()){if(![15,60,1440].includes(minutes))throw Error('Invalid quick range');return {start:localInput(now-minutes*60000),end:localInput(now)};}
 export function parseInput(value,utc=false){
  if(!/^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?$/.test(value))throw Error('Enter a valid date and time.');
  if(value.length===16)value+=':00';

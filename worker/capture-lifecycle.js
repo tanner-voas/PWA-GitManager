@@ -13,7 +13,7 @@ export class CaptureLifecycle{
  async arm(s,delay=Object.keys(s.jobs).length||!s.manual?MIN:5*MIN){if(s.capability||Object.keys(s.jobs).length)await this.s.setAlarm(Date.now()+delay);else await this.s.deleteAlarm?.();}
  public(s,archive){return {enabled:archive?.enabled===true,manual:archive?.enabled===true&&(s.capability?s.manual:true),jobCount:Object.keys(s.jobs).length,periods:archive?.capturePeriods||[],error:s.error,regularUsage:archive?.regularUsage||{}};}
  async snapshot(s,archive,jobId=null){
-  const producer=await this.io.producer(),collector=await this.io.collector();
+  const producer=await this.io.producer(),collector=await this.io.collector(s.ownerHash);
   const event=createEvent('git-manager','status',{app:'gitmanager',kind:'snapshot',outcome:'success',correlation:{jobId:jobId||Object.keys(s.jobs)[0]},diagnostics:{archive,producer,collector,manual:s.manual,jobCount:Object.keys(s.jobs).length}});
   if(!event)throw Error('Invalid status snapshot');const result=await this.io.append(s.capability,[event]);if(result?.accepted+result?.duplicates!==1||result.rejected)throw Error('Status snapshot not accepted');s.lastSnapshot=Date.now();await this.save(s);
  }
@@ -50,11 +50,13 @@ export class CaptureLifecycle{
  async request(action,session,id){
   const owner=await this.io.session(session,'checkpoint-owner');if(!/^[a-f0-9]{64}$/.test(owner?.ownerHash||''))throw Error('Connect Google Drive');
   let s=await this.state(),archive=await this.io.session(session,'status');if(!ok(archive))throw Error('Telemetry status unavailable');
+  // Status is observational: never adopt, bind, stop or clear a generation here.
+  if(action==='status')return this.public(s.ownerHash===owner.ownerHash?s:empty(),archive);
   if(s.ownerHash!==owner.ownerHash){s=empty();s.ownerHash=owner.ownerHash;await this.save(s);}
   // Existing captures from R8 are manual until their owner explicitly disables.
-  if(archive.enabled&&!s.capability){s.manual=true;await this.save(s);if(action!=='status')archive=await this.activate(s,session);else{try{archive=await this.activate(s,session);}catch{s.error='capture-adoption-unavailable';await this.save(s);}}}
+  if(archive.enabled&&!s.capability){s.manual=true;await this.save(s);archive=await this.activate(s,session);}
   if(!archive.enabled&&s.capability){try{await this.io.stop(s.capability);await this.io.clear(s.capability);}catch{}s.capability=null;s.controlCapability=null;s.bound=false;s.manual=false;s.jobs={};await this.save(s);}
-  if(action==='status')return this.public(s,archive);
+  if(action==='prepare-upload'){if(!archive.enabled)return {outcome:'disabled'};return {outcome:await this.drain(s)?'drained':'incomplete'};}
   if(action==='job-start'){
    if(!validJob(id))throw Error('Invalid job');const last=await this.pruneJobs(s);
    // A new job following a completed auto-capture starts its own period, unless

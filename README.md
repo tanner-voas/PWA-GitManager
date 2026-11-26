@@ -1,4 +1,4 @@
-# PWA-GitManager v0.1.20
+# PWA-GitManager v0.1.21
 
 A mobile-first GitHub workspace manager for AppLauncher and a standalone recovery URL. GitHub is the source of truth; the iPhone never needs a local Git clone. The implementation is split into this repository (browser app + Cloudflare API) and **PWA-GitRunner**, a separate **private** repository that runs trusted GitHub Actions jobs. Install the same private GitHub App on all repositories you want to manage, including both of these. New installations/repositories are discovered from the installation API, not AppLauncher's application list.
 

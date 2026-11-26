@@ -7,6 +7,8 @@ import {WorkflowCollector,workflowIO} from './workflow-collector.js';
 import {probeWorkflow} from './telemetry-probe.js';
 import {workerRequestEvent} from './worker-telemetry.js';
 import {CaptureLifecycle} from './capture-lifecycle.js';
+import {recordDownload} from './download-diagnostics.js';
+import {createEvent} from './telemetry-schema.js';
 import {measuredR2} from './r2-telemetry.js';
 const PREFIX='/_git/v1', RUN='/_git-runner/v1';
 const originOK=(env,url)=>String(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim()).includes(url.origin);
@@ -73,6 +75,7 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
     const report=await probeWorkflow({repo:env.CONTROLLER_REPO,route:repoRoute(env,env.CONTROLLER_REPO),authority:async()=>{const r=await internal(env,'/telemetry-authority');if(!r.ok)throw Error('authority');return (await r.json()).capability;},readToken:()=>readToken(env),get:gh,append:(c,events)=>env.PROFILES.telemetryAppend(c,events),flush:()=>env.PROFILES.telemetrySession(url.origin,profileCookie,'flush')});if(report.stages.some(x=>[401,403,429].includes(x.httpStatus)))try{await collector(env,'probe-backoff','POST',{});}catch{}return json(report);
    }
    if(action==='prepare-upload'){
+    if(ctx)return capture(env,'prepare-upload',{session:captureSession(req,url)});
     const read=()=>env.PROFILES.telemetrySession(url.origin,profileCookie,'status');
     const initial=await read();if(!initial||initial.error)return fail('Archive status unavailable',503);if(!initial.enabled)return json({outcome:'disabled'});
     // Bounded and non-destructive. Concurrent producers may enqueue new work.
@@ -80,6 +83,7 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
     let producer;for(let i=0;i<4;i++){const r=await collector(env,'shutdown-drain','POST',{});if(!r.ok)return json({outcome:'incomplete'});producer=await r.json();if(producer.pending===0||producer.failures)break;}
     const final=await env.PROFILES.telemetrySession(url.origin,profileCookie,'drain');return json({outcome:final?.enabled===true&&final?.pending===0&&!final?.error&&!final?.drainBlocked&&producer?.pending===0?'drained':'incomplete'});
    }
+   if(ctx&&action==='flush')return capture(env,'flush',{session:captureSession(req,url)});
    let outbox=null;if(action==='disable'){
     // Serialize shutdown at the producer; prevent new enqueues while draining accepted records.
     const gate=await collector(env,'shutdown-start','POST',{});if(!gate.ok)return fail('Telemetry remains enabled: producer shutdown is busy. Retry disabling.',409);
@@ -105,7 +109,7 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
    const r=await internal(env,'/telemetry-authority','POST',{capability});if(!r.ok)return fail('Could not store telemetry authority; retry enabling',503);if(ctx){try{const rr=await collector(env,'enqueue','POST',{capability,items:[]});if(!rr.ok)console.warn('telemetry-authority','queue-refresh-deferred');}catch{}}}
    if(action==='status'&&ctx)try{const r=await collector(env,'status');if(r.ok)outbox=await r.json();}catch{}
    let authorityConfigured=null; if(ctx)try{const r=await internal(env,'/telemetry-authority');if(r.ok)authorityConfigured=!!(await r.json()).capability;}catch{}
-   let workflowCollector=null,workflowCollectorError=null;if(ctx)try{let r;if(!status.enabled){r=await poller(env,'stop','POST',{});if((await adminStatus(req,env)).unlocked){const proof=await env.PROFILES.telemetrySession(url.origin,profileCookie,'checkpoint-owner');if(/^[a-f0-9]{64}$/.test(proof?.ownerHash||''))r=await poller(env,'paused-status','POST',{ownerHash:proof.ownerHash});}}else if(action==='poll')r=await poller(env,'scan','POST',{});else r=await poller(env,'ensure','POST',{repair:action==='enable'});if(r.ok)workflowCollector=await r.json();else workflowCollectorError='collector-http-'+r.status;}catch{workflowCollectorError='collector-unreachable';}
+   let workflowCollector=null,workflowCollectorError=null;if(ctx)try{let r;if(!status.enabled){r=await poller(env,'status');if(r.ok){const observed=await r.json();r=json({enabled:false,paused:observed.paused===true,nextPoll:null});}if((await adminStatus(req,env)).unlocked){const proof=await env.PROFILES.telemetrySession(url.origin,profileCookie,'checkpoint-owner');if(/^[a-f0-9]{64}$/.test(proof?.ownerHash||''))r=await poller(env,'paused-status','POST',{ownerHash:proof.ownerHash});}}else if(action==='poll')r=await poller(env,'scan','POST',{});else if(action==='enable')r=await poller(env,'ensure','POST',{repair:true});else r=await poller(env,'status');if(r.ok)workflowCollector=await r.json();else workflowCollectorError='collector-http-'+r.status;}catch{workflowCollectorError='collector-unreachable';}
    return json(ctx?{...status,producer:outbox,workflowCollector,workflowCollectorError,authorityConfigured}:status);
   }catch{return fail('Telemetry archive not available. Deploy PWA-GoogleDrive v0.1.14 or later first.',503);}
  }
@@ -130,7 +134,7 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
    const href=r.headers.get('Location');let destination;try{destination=new URL(href);}catch{return fail('Artifact download unavailable',502);}
    // GitHub returns a short-lived signed storage URL. Never forward the installation token.
    if(![301,302,303,307,308].includes(r.status)||destination.protocol!=='https:'||destination.username||destination.password)return fail('Artifact redirect refused',502);
-   const archive=await fetch(destination.href,{redirect:'manual'});if(!archive.ok)return fail('Export artifact unavailable or expired',502);return new Response(archive.body,{headers:{'Content-Type':'application/zip','Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
+   const archive=await fetch(destination.href,{redirect:'manual'});if(!archive.ok)return fail('Export artifact unavailable or expired',502);const headers={'Content-Type':'application/zip','Cache-Control':'no-store','Referrer-Policy':'no-referrer'};const length=archive.headers.get('Content-Length');if(length&&/^\d+$/.test(length)&&!archive.headers.get('Content-Encoding'))headers['Content-Length']=length;return new Response(archive.body,{headers});
   }
   if(path==='/jobs')return await internal(env,'/jobs');if(/^\/jobs\/[0-9a-f-]{36}$/.test(path))return await internal(env,path);if(path==='/repos'||path.startsWith('/repos/'))return await repositoryView(req,env,url,path,ctx);return fail('Unknown API route',404);
  }
@@ -139,6 +143,7 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
  if(req.method==='POST'&&/^\/repos\/[A-Za-z0-9_.-]+\/workflows\/(tags|reconcile)$/.test(path)){
   const [, ,name,,action]=path.split('/');const rt=await readToken(env);if(!(await installed(env,rt)).some(r=>r.name===name))return fail('Repository not installed',404);if(action==='reconcile'&&name!=='AppLauncher')return fail('Only AppLauncher has the central reconciliation workflow');const t=await token(env,{actions:'write',metadata:'read'},[name]);const workflow=action==='tags'?'tag-main.yml':'validate-production.yml';await gh(t,repoRoute(env,name)+'/actions/workflows/'+workflow+'/dispatches',{method:'POST',body:{ref:'main'}});return json({accepted:true});
  }
+ if(req.method==='POST'&&/^\/jobs\/[0-9a-f-]{36}\/download-diagnostic$/.test(path)){const raw=await req.text();if(raw.length>2048)return fail('Invalid download diagnostic');return internal(env,path,'POST',JSON.parse(raw));}
  if(req.method==='POST'&&path==='/exports'){
   const spec=await req.json(),t=await readToken(env),repos=await installed(env,t),names=[...new Set(spec.repositories||[])];if(!names.length||names.length>16||names.some(n=>!repos.some(r=>r.name===n))||!['lightweight','recursive','bundle'].includes(spec.format))return fail('Invalid export request');const id=crypto.randomUUID();measurement.jobId=id;const captureIssue=spec.start===true?await enrollJob(env,req,url,id):null;return await internal(env,'/jobs','POST',{id,captureIssue,mode:'export',plan:{schema:1,title:'Repository export',updates:[]},exportSpec:{repositories:names,format:spec.format},start:spec.start===true});
  }
@@ -176,7 +181,7 @@ export class JobCoordinator {
   bind:async c=>{await checked(internal(env,'/telemetry-authority','POST',{capability:c}));await checked(collector(env,'enqueue','POST',{capability:c,items:[]}));},
   clear:async c=>{const a=await checked(internal(env,'/telemetry-authority'));if(a.capability===c)await checked(internal(env,'/telemetry-authority','DELETE'));await checked(collector(env,'clear','POST',{capability:c}));},
   ensure:()=>checked(poller(env,'ensure','POST',{repair:true})),stop:c=>checked(poller(env,'stop','POST',{capability:c})),
-  producer:()=>checked(collector(env,'status')),collector:()=>checked(poller(env,'status')),
+  producer:()=>checked(collector(env,'status')),collector:async ownerHash=>{const state=await checked(poller(env,'status'));return state.paused&&ownerHash?checked(poller(env,'paused-status','POST',{ownerHash})):state;},
   gate:on=>checked(collector(env,on?'shutdown-start':'shutdown-end','POST',{})),
   drainProducer:async()=>{let p;for(let i=0;i<4;i++){p=await checked(collector(env,'shutdown-drain','POST',{}));if(!p.pending||p.failures)break;}return p;}
  });}
@@ -207,8 +212,8 @@ export class JobCoordinator {
   return kept;
  }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
-  if(path.startsWith('/capture/')&&method==='POST'){await this.s.put('telemetry:capture-mode',true);const {session,id}=await req.json();return json(await this.captureLifecycle().request(path.split('/').at(-1),session,id));}
-  if(path.startsWith('/workflow-poller/')){const poll=this.workflowPoller();if(path==='/workflow-poller/status'&&method==='GET')return json(await poll.status());if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:workflow-poller-mode',true);if(path==='/workflow-poller/ensure')return json(await poll.ensure(await req.json()));if(path==='/workflow-poller/scan')return json(await poll.scanNow());if(path==='/workflow-poller/stop')return json(await poll.stop(await req.json()));if(path==='/workflow-poller/paused-status')return json(await poll.pausedStatus((await req.json()).ownerHash));return fail('Unknown poller operation',404);}
+  if(path.startsWith('/capture/')&&method==='POST'){if(path!=='/capture/status')await this.s.put('telemetry:capture-mode',true);const {session,id}=await req.json();return json(await this.captureLifecycle().request(path.split('/').at(-1),session,id));}
+  if(path.startsWith('/workflow-poller/')){const poll=this.workflowPoller();if(path==='/workflow-poller/status'&&method==='GET')return json(await poll.status());if(method!=='POST')return fail('Method not allowed',405);if(path==='/workflow-poller/paused-status')return json(await poll.pausedStatus((await req.json()).ownerHash));await this.s.put('telemetry:workflow-poller-mode',true);if(path==='/workflow-poller/ensure')return json(await poll.ensure(await req.json()));if(path==='/workflow-poller/scan')return json(await poll.scanNow());if(path==='/workflow-poller/stop')return json(await poll.stop(await req.json()));return fail('Unknown poller operation',404);}
   // Internal-only collector endpoints; the public route table never forwards these.
   if(path.startsWith('/collector/')){const box=new TelemetryOutbox(this.s,this.env.PROFILES);if(path==='/collector/status'&&method==='GET')return json(await box.status());if(method!=='POST')return fail('Method not allowed',405);await this.s.put('telemetry:collector-mode',true);if(path==='/collector/shutdown-start'){const now=Date.now();if((await this.s.get('telemetry:shutdown-until')||0)>now)return fail('Shutdown busy',409);await this.s.put('telemetry:shutdown-until',now+300000);return json({ok:true});}if(path==='/collector/shutdown-end'){await this.s.delete('telemetry:shutdown-until');return json({ok:true});}if(path==='/collector/shutdown-drain')return json(await box.drain({preservePending:true}));if(path==='/collector/enqueue'){if((await this.s.get('telemetry:shutdown-until')||0)>Date.now())return fail('Telemetry shutdown in progress',409);const {capability,items,poll}=await req.json();if(poll&&(!Array.isArray(items)||items.length>64||(await box.status()).pending+items.length>80))return fail('Telemetry queue busy',409);if(capability!==(await box.state()).capability){const authority=await internal(this.env,'/telemetry-authority');if(!authority.ok||(await authority.json()).capability!==capability)return fail('Telemetry authority changed',409);}return json(await box.enqueue(capability,items)||{ok:false});}if(path==='/collector/probe-backoff'){await this.s.put('telemetry:probe-backoff',Date.now()+15*60000);return json({ok:true});}if(path==='/collector/probe-lease'){const now=Date.now(),last=await this.s.get('telemetry:probe-lease');if((await this.s.get('telemetry:probe-backoff')||0)>now||last&&now-last<60000)return fail('Diagnostic collection cooldown',429);await this.s.put('telemetry:probe-lease',now);return json({ok:true});}if(path==='/collector/flush')return json(await box.drain({manual:true}));if(path==='/collector/clear'){const {capability}=await req.json();await box.clear(capability);return json({ok:true});}return fail('Unknown collector operation',404);}
   if(path==='/telemetry-run-links'&&method==='GET'){
@@ -226,6 +231,7 @@ export class JobCoordinator {
 
   if(path==='/jobs'&&method==='GET'){return json(await this.history());}
   if(path==='/jobs'&&method==='POST'){const {start,...data}=await req.json();const j={...data,controller:this.env.CONTROLLER_REPO,status:'draft',index:0,records:[],retries:0,createdAt:new Date().toISOString()};if(start===true&&j.mode==='export')return json(await this.begin(j),201);await this.save(j);return json(j,201);}
+  const download=/^\/jobs\/([0-9a-f-]{36})\/download-diagnostic$/.exec(path);if(download&&method==='POST'){const j=await this.get(download[1]);if(j.mode!=='export'||j.status!=='completed')return fail('Export is not ready',409);const data=await req.json(),result=recordDownload(j.downloadDiagnostics,data);if(!result)return fail('Invalid download diagnostic');if(result.changed){j.downloadDiagnostics=result.rows;await this.s.put('job:'+j.id,j);if(data.outcome!=='pending'){const event=createEvent('git-manager','export',{app:'gitmanager',appVersion:pkg.version,outcome:data.outcome,metrics:{durationMs:data.durationMs,bytes:data.bytes},correlation:{jobId:j.id,attemptId:data.id},coverage:'partial'});if(event)this.capture([event]);}}return json({ok:true});}
   let m=/^\/jobs\/([0-9a-f-]{36})(?:\/(start|resume|cancel))?$/.exec(path);if(m){const j=await this.get(m[1]);if(method==='GET'&&!m[2])return json(j);if(method!=='POST')return fail('Method not allowed',405);
    if(m[2]==='start'){j.captureIssue=(await req.json()).captureIssue||null;if(j.status!=='draft')throw Error('Only draft jobs may be started');return json(await this.begin(j));}
    if(m[2]==='cancel'){if(!['draft','failed','paused','awaiting-pr','running'].includes(j.status))throw Error('Cannot cancel a completed job');if(j.status==='running'&&j.attempt?.writeIssued)throw Error('Publication credentials were issued. Wait for the runner to finish, then recover if necessary.');if(j.attempt?.writeIssued&&!j.records.some(r=>r.index===j.index))throw Error('Publication is uncertain; recover before cancelling');j.status='cancelled';j.retryAt=null;await this.save(j);await this.release(j);return json(j);}
