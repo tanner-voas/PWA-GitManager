@@ -79,27 +79,35 @@ export class WorkflowCollector{
    // Reserve room for the poller's bounded batch and for live job events.
    if(q.pending>32||(q.pending>0&&q.failures>0)){s.backpressure++;s.lastStage='backpressure';await this.save(s);await this.arm(delay,now);return this.status();}
    const beforeExpiry=s.pending.length;s.pending=s.pending.filter(x=>Date.parse(x.updatedAt)>=now-2*DAY);s.expiredDetails+=beforeExpiry-s.pending.length;
-   const detailOnly=trigger==='alarm'&&s.alarmTicks%2===0&&s.pending.filter(x=>!x.retryAt||x.retryAt<=now).length>=DETAIL_FIRST_AT;if(detailOnly)s.detailOnlyTicks++;
+   let links={};if(this.io.runLinks)try{links=await this.io.runLinks();s.lastCorrelationError=null;}catch{s.correlationFailures++;s.lastCorrelationError='job-correlation-unavailable';}
+   const activeRun=Object.values(links).some(x=>x.active===true);
+   const priorityScan=activeRun&&trigger==='alarm'&&s.lastRepo!==this.io.controller&&s.repos.includes(this.io.controller);
+   // A generic queued observation can acquire a job association later. Keep
+   // the correlated detail key separate from any previously archived generic one.
+   const merged=new Map();for(const item of s.pending){const link=item.repo===this.io.controller?links[item.id]:null;const next=link?{...item,jobId:link.jobId,attemptId:link.attemptId}:item;const k=key(next),prev=merged.get(k);if(s.seen[k])continue;if(!prev||Number(next.retryAt||0)>Number(prev.retryAt||0))merged.set(k,next);}s.pending=[...merged.values()];
+   const priority=x=>{const link=x.repo===this.io.controller?links[x.id]:null;return link?.active?3:link&&link.recentAt>=now-15*60000?2:x.jobId?1:0;};
+   const sortPending=()=>s.pending.sort((a,b)=>priority(b)-priority(a)||Number(b.failed)-Number(a.failed)||Date.parse(a.updatedAt)-Date.parse(b.updatedAt));
+   const detailOnly=!priorityScan&&trigger==='alarm'&&s.alarmTicks%2===0&&s.pending.filter(x=>!x.retryAt||x.retryAt<=now).length>=DETAIL_FIRST_AT;if(detailOnly)s.detailOnlyTicks++;
    s.lastStage='token';s.requests++;await this.save(s);const t=await this.io.readToken();const get=async path=>{s.requests++;await this.save(s);return this.io.get(t,path);};
    if(!detailOnly&&(!s.repos.length||s.cursor>=s.repos.length)){s.lastStage='repositories';const list=await get('/installation/repositories?per_page=100&page=1');if(!Array.isArray(list?.repositories))throw Error('invalid-provider-response');if(Number(list.total_count)>list.repositories.length){s.truncated++;s.repoListLimits++;}
     s.repos=list.repositories.filter(r=>r.owner?.login?.toLowerCase()===this.io.owner.toLowerCase()&&!r.archived&&!r.disabled&&repoEvents({name:r.name},now).length).map(r=>r.name).sort((a,b)=>a==='PWA-GitRunner'?-1:b==='PWA-GitRunner'?1:a.localeCompare(b));s.cursor=0;}
-   const repo=detailOnly?null:s.repos[s.cursor];s.lastAttemptRepo=repo||null;s.lastRows=0;s.lastNewRuns=0;let entries=[],observed=[];
+   const repo=detailOnly?null:priorityScan?this.io.controller:s.repos[s.cursor];s.lastAttemptRepo=repo||null;s.lastRows=0;s.lastNewRuns=0;let entries=[],observed=[];
    if(repo){s.lastStage='workflows';const data=await get(this.io.route(repo)+'/actions/runs?per_page=20');if(!Array.isArray(data?.workflow_runs))throw Error('invalid-provider-response');const rows=data.workflow_runs.slice(0,20);s.lastRows=rows.length;if(Number(data.total_count)>20&&rows.length===20&&Date.parse(rows.at(-1).updated_at)>=now-LOOKBACK){s.truncated++;s.workflowListLimits++;}
-    let links={};if(repo===this.io.controller&&this.io.runLinks)try{links=await this.io.runLinks();s.lastCorrelationError=null;}catch{s.correlationFailures++;s.lastCorrelationError='job-correlation-unavailable';}
-    for(const r of rows){if(Date.parse(r.updated_at||r.created_at)<now-LOOKBACK)continue;const correlation=links[String(r.id)]||{};const event=workflowEvent(repo,r,now,correlation);if(!event)continue;if(!s.runsSeen[event.key]){event.event.eventId=await stableId(event.key);entries.push(event);observed.push(event.key);}if(r.status!=='completed'||!numericId(r.run_attempt))continue;const item={repo,id:String(r.id),attempt:String(r.run_attempt),...correlation,commit:event.event.correlation.commit,updatedAt:r.updated_at,failed:r.conclusion==='failure'||r.conclusion==='timed_out'};if(!s.seen[key(item)]&&!s.pending.some(p=>key(p)===key(item)))s.pending.push(item);}
-    const pendingBefore=s.pending.length;s.pending=s.pending.filter(x=>Date.parse(x.updatedAt)>=now-2*DAY);s.expiredDetails+=pendingBefore-s.pending.length;s.pending.sort((a,b)=>Number(!!b.jobId)-Number(!!a.jobId)||Number(b.failed)-Number(a.failed)||Date.parse(a.updatedAt)-Date.parse(b.updatedAt));if(s.pending.length>MAX_PENDING){s.truncated+=s.pending.length-MAX_PENDING;s.pendingOverflow+=s.pending.length-MAX_PENDING;s.pending=s.pending.slice(0,MAX_PENDING);} }
+
+    for(const r of rows){if(Date.parse(r.updated_at||r.created_at)<now-LOOKBACK)continue;const linked=repo===this.io.controller?links[String(r.id)]:null;const correlation=linked?{jobId:linked.jobId,attemptId:linked.attemptId}:{};const event=workflowEvent(repo,r,now,correlation);if(!event)continue;if(!s.runsSeen[event.key]){event.event.eventId=await stableId(event.key);entries.push(event);observed.push(event.key);}if(r.status!=='completed'||!numericId(r.run_attempt))continue;const item={repo,id:String(r.id),attempt:String(r.run_attempt),...correlation,commit:event.event.correlation.commit,updatedAt:r.updated_at,failed:r.conclusion==='failure'||r.conclusion==='timed_out'};if(!s.seen[key(item)]&&!s.pending.some(p=>key(p)===key(item)))s.pending.push(item);}
+    const pendingBefore=s.pending.length;s.pending=s.pending.filter(x=>Date.parse(x.updatedAt)>=now-2*DAY);s.expiredDetails+=pendingBefore-s.pending.length;sortPending();if(s.pending.length>MAX_PENDING){s.truncated+=s.pending.length-MAX_PENDING;s.pendingOverflow+=s.pending.length-MAX_PENDING;s.pending=s.pending.slice(0,MAX_PENDING);} }
    // Commit discovered runs independently of optional job details. A single
    // denied/malformed detail response must not block the repository cursor.
    s.lastNewRuns=observed.length;
    if(entries.length){s.lastStage='enqueue-workflows';if(!await this.io.enqueue(cap,entries))throw Error('archive-backpressure');s.enqueued+=entries.length;}
    for(const k of observed)s.runsSeen[k]=now;
    s.runsSeen=Object.fromEntries(Object.entries(s.runsSeen).filter(([,at])=>now-at<2*DAY).sort((a,b)=>b[1]-a[1]).slice(0,MAX_SEEN));
-   if(repo){s.cursor++;s.scans++;s.lastRepo=repo;s.lastScan=now;}
+   if(repo){if(!priorityScan)s.cursor++;s.scans++;s.lastRepo=repo;s.lastScan=now;}
    await this.save(s);
    // A detail-only tick trades discovery for up to two lookups, not extra provider calls.
    // Failed details rotate independently;
    // auth/rate errors respect provider backoff for all collection.
-   let detailError=null;
+   let detailError=null;sortPending();
    for(let n=0;n<(detailOnly&&q.pending<=16?2:1);n++){let item=s.pending.find(x=>!x.retryAt||x.retryAt<=now),detail=null;if(!item)break;try{s.lastStage='job-details';const d=await get(this.io.route(item.repo)+`/actions/runs/${item.id}/attempts/${item.attempt}/jobs?per_page=20`);detail=await jobDetailEvents(item,d,now);
     const records=detail.entries.slice();if(detail.truncated){const event=createEvent('github-actions','job',{eventId:await stableId(`truncated:${key(item)}`),kind:'snapshot',provenance:'provider',severity:'warning',coverage:'truncated',outcome:'unknown',correlation:{repo:item.repo,workflowRunId:item.id,runAttempt:item.attempt,jobId:item.jobId,attemptId:item.attemptId},metrics:{count:detail.entries.length}},now);records.push({event,key:`run:${key(item)}:truncated`});}
     s.lastStage='enqueue-details';if(records.length&&!await this.io.enqueue(cap,records))throw Error('archive-backpressure');s.enqueued+=records.length;
@@ -110,7 +118,7 @@ export class WorkflowCollector{
     if([401,403,429].includes(providerStatus(e))||Number(e.retryMs)>0||e.message==='archive-backpressure')throw e;
    }}
    s.lastStage=detailError?'details-deferred':detailOnly?'detail-catchup':repo?'scan-complete':'no-repositories';
-   for(const field of ['seen','runsSeen'])s[field]=Object.fromEntries(Object.entries(s[field]).filter(([,at])=>now-at<2*DAY).sort((a,b)=>b[1]-a[1]).slice(0,MAX_SEEN));s.failures=0;s.lastError=null;s.retryAt=null;if(s.pending.filter(x=>!x.retryAt||x.retryAt<=now+CATCHUP).length>=CATCHUP_AT){delay=CATCHUP;s.catchupTicks++;}
+   for(const field of ['seen','runsSeen'])s[field]=Object.fromEntries(Object.entries(s[field]).filter(([,at])=>now-at<2*DAY).sort((a,b)=>b[1]-a[1]).slice(0,MAX_SEEN));s.failures=0;s.lastError=null;s.retryAt=null;if(activeRun||s.pending.filter(x=>!x.retryAt||x.retryAt<=now+CATCHUP).length>=CATCHUP_AT){delay=CATCHUP;s.catchupTicks++;}
   }catch(e){s.failures++;s.lastError=failureCode(e);s.lastStatus=providerStatus(e);delay=retryDelay(e,s.failures);s.retryAt=now+delay;}
   await this.save(s);await this.arm(delay,now);return this.status();
  }

@@ -91,3 +91,10 @@ test('R8 paused summary is read-only, owner and epoch scoped, expires, contains 
 test('R9 manual poll and status cannot reopen a stopped collector before authority is cleared',async()=>{
  const x=setup(),epoch=crypto.randomUUID(),c=signedFixture('123',crypto.randomUUID(),epoch);x.setAuth(c);await x.poll.ensure({repair:true,now});await x.poll.tick(now+60000);const st=await x.poll.state();st.pending=[{repo:'Ciyan',id:'123',attempt:'1',updatedAt:run.updated_at}];await x.poll.save(st);await x.poll.stop({capability:c,now:now+61000});const paused=await x.poll.state();await x.poll.status();await x.poll.scanNow(now+62000);assert.deepEqual(await x.poll.state(),paused);assert.equal(x.s.alarm,null);x.setAuth(signedFixture('123',crypto.randomUUID(),epoch));await x.poll.ensure({repair:true,now:now+63000});assert.equal((await x.poll.status()).pendingDetails,1);assert.equal((await x.poll.status()).scans,st.scans);
 });
+test('R10 active job gets preferential controller scan without consuming normal repository cursor',async()=>{
+ const x=setup(),jobId=crypto.randomUUID(),attemptId=crypto.randomUUID();x.io.controller='PWA-GitRunner';await x.poll.ensure({now});await x.poll.tick(now+60000);await x.poll.tick(now+360000);
+ const s=await x.poll.state();s.repos=['PWA-GitRunner','Ciyan'];s.cursor=1;s.lastRepo='Ciyan';s.pending=[{repo:'PWA-GitRunner',id:'999',attempt:'1',jobId:crypto.randomUUID(),failed:true,updatedAt:stamp(-60000)},{repo:'PWA-GitRunner',id:'124',attempt:'2',updatedAt:run.updated_at}];await x.poll.save(s);
+ x.io.runLinks=async()=>({'124':{jobId,attemptId,active:true,recentAt:now+360000}});const get=x.io.get;x.io.get=async(t,p)=>p.includes('/actions/runs?')?{total_count:1,workflow_runs:[{...run,id:124}]}:get(t,p);
+ const a=await x.poll.tick(now+480000);assert.equal(a.lastRepo,'PWA-GitRunner');assert.equal(a.cursor,1);assert.equal(a.lastDetailedRun.id,'124');assert.equal(a.pendingDetails,1);assert.ok(x.events.some(e=>e.operation==='job'&&e.correlation.jobId===jobId&&e.correlation.attemptId===attemptId));assert.equal(x.s.alarm,now+600000);
+ const b=await x.poll.tick(now+600000);assert.equal(b.lastRepo,'Ciyan');assert.equal(b.cursor,2);
+});
