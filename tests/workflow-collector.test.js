@@ -62,3 +62,25 @@ test('missing historical job links do not stop ordinary unattended discovery',as
 });
 
 test('R6 backlog accelerates bounded ticks and prioritizes correlated runs',async()=>{const x=setup(),get=x.io.get,jobId=crypto.randomUUID();x.io.controller='PWA-GitRunner';x.io.runLinks=async()=>({'111':{jobId}});x.io.get=async(t,p)=>p.includes('/actions/runs?')?{total_count:20,workflow_runs:Array.from({length:20},(_,i)=>({...run,id:100+i,conclusion:i===11?'success':'failure'}))}:get(t,p);const st=await x.poll.scanNow(now);assert.equal(st.pendingDetails,19);assert.equal(st.lastDetailedRun.id,'111');assert.equal(st.catchupTicks,1);assert.equal(x.s.alarm,now+120000);assert.equal(st.pendingOverflow,0);assert.equal(st.details,1);});
+
+const signedFixture=(sub,generation,epoch)=>Buffer.from(JSON.stringify({type:'workspace-telemetry',sub,generation,epoch})).toString('base64url')+'.test-signature';
+test('R7 verified same-account pause survives repeated status and new generation, retains pending and dedup',async()=>{
+ const x=setup(),epoch=crypto.randomUUID(),first=signedFixture('123',crypto.randomUUID(),epoch),next=signedFixture('123',crypto.randomUUID(),epoch),get=x.io.get;
+ x.setAuth(first);x.io.get=async(t,p)=>p.includes('/actions/runs?')?{total_count:3,workflow_runs:[run,{...run,id:124},{...run,id:125}]}:get(t,p);
+ await x.poll.ensure({repair:true,now});const a=await x.poll.tick(now+60000);assert.equal(a.pendingDetails,2);assert.equal(a.details,1);
+ const prior=await x.poll.state();const paused=await x.poll.stop({capability:first,now:now+61000});assert.deepEqual(paused,{enabled:false,paused:true,nextPoll:null});assert.equal(x.s.alarm,null);x.setAuth(null);
+ assert.deepEqual(await x.poll.stop({now:now+62000}),paused);assert.equal((await x.poll.state()).pending.length,2);const calls=x.calls.length;await x.poll.tick(now+63000);assert.equal(x.calls.length,calls);
+ x.setAuth(next);const b=await new WorkflowCollector(x.s,x.io).ensure({repair:true,now:now+64000});assert.equal(b.resumes,1);assert.equal(b.pendingDetails,2);assert.equal(b.details,1);assert.equal((await x.poll.state()).cursor,prior.cursor);assert.deepEqual((await x.poll.state()).seen,prior.seen);assert.deepEqual((await x.poll.state()).runsSeen,prior.runsSeen);assert.doesNotMatch(JSON.stringify(b),/ownerHash|authorityHash|test-signature/);
+});
+test('R7 authorization epoch and account changes cannot restore a paused checkpoint',async()=>{
+ for(const change of ['epoch','account']){const x=setup(),epoch=crypto.randomUUID(),cap=signedFixture('123',crypto.randomUUID(),epoch);x.setAuth(cap);await x.poll.ensure({repair:true,now});await x.poll.tick(now+60000);await x.poll.stop({capability:cap,now:now+61000});x.setAuth(signedFixture(change==='account'?'456':'123',crypto.randomUUID(),change==='epoch'?crypto.randomUUID():epoch));const status=await x.poll.ensure({repair:true,now:now+62000});assert.equal(status.resumes,0);assert.equal(status.details,0);assert.equal(status.pendingDetails,0);assert.equal(status.lastDetailedRun,null);}
+});
+test('R7 pause cannot bypass provider backoff; stale checkpoints expire',async()=>{
+ const x=setup(),epoch=crypto.randomUUID(),cap=signedFixture('123',crypto.randomUUID(),epoch);x.setAuth(cap);await x.poll.ensure({repair:true,now});x.setRate(true);await x.poll.tick(now+60000);const until=(await x.poll.status()).retryAt;await x.poll.stop({capability:cap,now:now+61000});x.setAuth(signedFixture('123',crypto.randomUUID(),epoch));await x.poll.ensure({repair:true,now:now+62000});assert.equal(x.s.alarm,until);const calls=x.calls.length;await x.poll.scanNow(now+120000);assert.equal(x.calls.length,calls);await x.poll.stop({capability:await x.io.authority(),now:now+121000});assert.equal((await x.poll.stop({now:now+3*86400000})).paused,false);
+});
+test('R7 large backlog trades a discovery scan for at most two detail lookups, then rotates discovery',async()=>{
+ const x=setup();await x.poll.ensure({now});await x.poll.tick(now+60000);const s=await x.poll.state();s.pending=Array.from({length:60},(_,i)=>({repo:'Ciyan',id:String(1000+i),attempt:'1',commit:sha,updatedAt:run.updated_at}));await x.poll.save(s);const start=x.calls.length;const a=await x.poll.tick(now+360000);assert.equal(a.detailOnlyTicks,1);assert.equal(a.pendingDetails,58);assert.equal(a.scans,1);assert.equal(a.details,3);assert.equal(x.calls.length-start,3);assert.equal(a.lastStage,'detail-catchup');const b=await x.poll.tick(now+480000);assert.equal(b.scans,2);assert.equal(b.details,4);assert.equal(b.detailOnlyTicks,1);
+});
+test('R7 catch-up honors outbox room and keeps pending on backpressure',async()=>{
+ const x=setup();await x.poll.ensure({now});await x.poll.tick(now+60000);const s=await x.poll.state();s.pending=Array.from({length:60},(_,i)=>({repo:'Ciyan',id:String(1000+i),attempt:'1',commit:sha,updatedAt:run.updated_at}));await x.poll.save(s);x.setQueue({pending:20,failures:0});const a=await x.poll.tick(now+360000);assert.equal(a.pendingDetails,59);assert.equal(a.details,2);assert.equal(a.detailOnlyTicks,1);
+});
