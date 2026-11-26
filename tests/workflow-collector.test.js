@@ -53,3 +53,10 @@ test('manual and alarm collection evidence stays distinct across reconstruction'
  const x=setup();let a=await x.poll.scanNow(now);assert.equal(a.manualTicks,1);assert.equal(a.alarmTicks,0);assert.equal(a.lastTickTrigger,'manual');assert.deepEqual(a.lastDetailedRun,{repo:'PWA-GitRunner',id:'123',attempt:'2',records:3,truncated:false});
  a=await new WorkflowCollector(x.s,x.io).tick(now+300000);assert.equal(a.manualTicks,1);assert.equal(a.alarmTicks,1);assert.equal(a.lastTickTrigger,'alarm');assert.equal(a.lastDetailedRun.repo,'Ciyan');
 });
+
+test('unattended scan links controller workflow and details to durable workspace attempt',async()=>{
+ const x=setup(),jobId=crypto.randomUUID(),attemptId=crypto.randomUUID();x.io.controller='PWA-GitRunner';x.io.runLinks=async()=>({'123':{jobId,attemptId}});await x.poll.ensure({now});await x.poll.tick(now+60000);assert.equal(x.events.length,4);assert.ok(x.events.every(e=>e.correlation.jobId===jobId&&e.correlation.attemptId===attemptId));
+});
+test('missing historical job links do not stop ordinary unattended discovery',async()=>{
+ const x=setup();x.io.controller='PWA-GitRunner';x.io.runLinks=async()=>{throw Error('unavailable');};await x.poll.ensure({now});const status=await x.poll.tick(now+60000);assert.equal(status.correlationFailures,1);assert.equal(status.scans,1);assert.equal(x.events.length,4);
+});

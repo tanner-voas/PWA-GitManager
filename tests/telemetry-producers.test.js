@@ -68,3 +68,8 @@ test('generic workflow cannot suppress job-correlated observation',async()=>{
 test('terminal progress reflects outcome and preserves intermediate evidence',async()=>{
  const c=new JobCoordinator({storage:new Storage()},{});for(const status of ['completed','failed','cancelled']){const j={...structuredClone(claimed),status,index:status==='completed'?1:0,retryAt:123};await c.save(j);assert.equal(j.progress.phase,status);assert.equal(j.progress.done,j.index);assert.equal(j.progress.total,1);assert.equal(j.retryAt,null);assert.equal(j.lastIntermediateProgress.phase,'preparing');await c.save(j);assert.equal(j.lastIntermediateProgress.phase,'preparing');}
 });
+
+test('shutdown drain bypasses manual cooldown but retains pending on sink error',async()=>{
+ const s=new Storage(),box=new TelemetryOutbox(s,{telemetryAppend:async()=>({error:'Telemetry capability revoked'})});await box.enqueue(cap,sample(),now);const before=await box.status();const blocked=await box.drain({preservePending:true,now});assert.equal(blocked.pending,before.pending);assert.equal(blocked.dropped,before.dropped);assert.equal(blocked.configured,true);assert.equal(blocked.failures,1);
+ const retry=new TelemetryOutbox(s,{telemetryAppend:ok});assert.equal((await retry.drain({preservePending:true,now})).pending,0);
+});

@@ -5,7 +5,7 @@ import {gh,readToken,repoRoute} from './github.js';
 // per tick; no Actions dispatch, no publication lock, no raw provider payloads.
 const KEY='telemetry:workflow-poller', TICK=5*60000, INITIAL=60000, MANUAL=60000, LOOKBACK=DAY, MAX_PENDING=60, MAX_SEEN=400;
 const iso=t=>new Date(t).toISOString();
-const fresh=()=>({enabled:false,authorityHash:null,repos:[],cursor:0,pending:[],seen:{},runsSeen:{},lastManual:0,lastScan:null,lastRepo:null,lastDetail:null,lastError:null,failures:0,requests:0,scans:0,details:0,truncated:0,backpressure:0,unavailableDetails:0,lastTick:null,lastStage:null,lastAttemptRepo:null,lastRows:0,lastNewRuns:0,enqueued:0,detailFailures:0,lastDetailError:null,lastStatus:null,retryAt:null,alarmTicks:0,manualTicks:0,lastTickTrigger:null,expiredDetails:0,lastDetailedRun:null});
+const fresh=()=>({enabled:false,authorityHash:null,repos:[],cursor:0,pending:[],seen:{},runsSeen:{},lastManual:0,lastScan:null,lastRepo:null,lastDetail:null,lastError:null,failures:0,requests:0,scans:0,details:0,truncated:0,backpressure:0,unavailableDetails:0,lastTick:null,lastStage:null,lastAttemptRepo:null,lastRows:0,lastNewRuns:0,enqueued:0,detailFailures:0,lastDetailError:null,lastStatus:null,retryAt:null,alarmTicks:0,manualTicks:0,lastTickTrigger:null,expiredDetails:0,lastDetailedRun:null,correlationFailures:0,lastCorrelationError:null});
 const providerStatus=e=>{const m=/^GitHub (\d{3})\b/.exec(String(e?.message||''));return m?Number(m[1]):null;};
 const failureCode=e=>e.message==='archive-backpressure'?'archive-backpressure':e.message==='authority-unavailable'?'authority-unavailable':e.message==='outbox-unavailable'?'outbox-unavailable':e.message==='invalid-provider-response'?'invalid-provider-response':[401,403,429].includes(providerStatus(e))?'github-auth-or-rate-limit':'provider-unavailable';
 const retryDelay=(e,n)=>Math.max(Math.min(6*60*60000,TICK*2**Math.min(n,6)),Number(e.retryMs)||0);
@@ -15,13 +15,14 @@ const hex=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256
 export const stableId=async s=>{const h=await hex(s);return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`;};
 const duration=(a,b)=>{a=Date.parse(a);b=Date.parse(b);return Number.isFinite(a)&&Number.isFinite(b)&&b>=a?b-a:undefined;};
 const time=(v,now)=>{const n=Date.parse(v);return Number.isFinite(n)&&n>=now-30*DAY&&n<=now+300000?iso(n):iso(now);};
-const key=r=>`${r.repo}:${r.id}:${r.attempt}`;
+const scope=r=>r.jobId?`:job:${r.jobId}:${r.attemptId||''}`:'';
+const key=r=>`${r.repo}:${r.id}:${r.attempt}${scope(r)}`;
 export async function jobDetailEvents(run,data,now=Date.now()){
  if(!Array.isArray(data?.jobs))throw Error('invalid-provider-response');const jobs=data.jobs;const entries=[];let cut=Number(data?.total_count)>jobs.length||jobs.length>12;
  for(const j of jobs.slice(0,12)){
   if(!numericId(j.id)){cut=true;continue;}
-  const parent=await hex(`github-job:${run.repo}:${run.id}:${run.attempt}:${j.id}`),steps=Array.isArray(j.steps)?j.steps:[];
-  const fields={kind:'snapshot',provenance:'provider',coverage:'partial',observedAt:iso(now),correlation:{repo:run.repo,commit:run.commit,workflowRunId:run.id,runAttempt:run.attempt,requestId:parent.slice(0,32)}};
+  const parent=await hex(`github-job:${run.repo}:${run.id}:${run.attempt}:${j.id}${scope(run)}`),steps=Array.isArray(j.steps)?j.steps:[];
+  const fields={kind:'snapshot',provenance:'provider',coverage:'partial',observedAt:iso(now),correlation:{repo:run.repo,commit:run.commit,workflowRunId:run.id,runAttempt:run.attempt,requestId:parent.slice(0,32),jobId:run.jobId,attemptId:run.attemptId}};
   async function add(op,entry,ordinal){const done=entry.status==='completed',o=done?outcome(entry.conclusion):'pending';const e=createEvent('github-actions',op,{...fields,eventId:await stableId(`${parent}:${op}:${ordinal}:${entry.status}:${entry.conclusion||''}`),occurredAt:time(entry.completed_at||entry.started_at||run.updatedAt,now),outcome:o,severity:o==='failed'?'error':'info',metrics:{durationMs:duration(entry.started_at,entry.completed_at),count:ordinal}},now);if(e)entries.push({event:e,key:`run:${run.repo}:${run.id}:${run.attempt}:${parent.slice(0,16)}:${op}:${ordinal}:${o}`});}
   await add('job',j,steps.length);
   for(const step of steps){if(entries.length>=30){cut=true;break;}if(!Number.isInteger(step.number)||step.number<0){cut=true;continue;}await add('step',step,step.number);}
@@ -58,7 +59,8 @@ export class WorkflowCollector{
     s.repos=list.repositories.filter(r=>r.owner?.login?.toLowerCase()===this.io.owner.toLowerCase()&&!r.archived&&!r.disabled&&repoEvents({name:r.name},now).length).map(r=>r.name).sort((a,b)=>a==='PWA-GitRunner'?-1:b==='PWA-GitRunner'?1:a.localeCompare(b));s.cursor=0;}
    const repo=s.repos[s.cursor];s.lastAttemptRepo=repo||null;s.lastRows=0;s.lastNewRuns=0;let entries=[],observed=[];
    if(repo){s.lastStage='workflows';const data=await get(this.io.route(repo)+'/actions/runs?per_page=20');if(!Array.isArray(data?.workflow_runs))throw Error('invalid-provider-response');const rows=data.workflow_runs.slice(0,20);s.lastRows=rows.length;if(Number(data.total_count)>20&&rows.length===20&&Date.parse(rows.at(-1).updated_at)>=now-LOOKBACK)s.truncated++;
-    for(const r of rows){if(Date.parse(r.updated_at||r.created_at)<now-LOOKBACK)continue;const event=workflowEvent(repo,r,now);if(!event)continue;if(!s.runsSeen[event.key]){event.event.eventId=await stableId(event.key);entries.push(event);observed.push(event.key);}if(r.status!=='completed'||!numericId(r.run_attempt))continue;const item={repo,id:String(r.id),attempt:String(r.run_attempt),commit:event.event.correlation.commit,updatedAt:r.updated_at,failed:r.conclusion==='failure'||r.conclusion==='timed_out'};if(!s.seen[key(item)]&&!s.pending.some(p=>key(p)===key(item)))s.pending.push(item);}
+    let links={};if(repo===this.io.controller&&this.io.runLinks)try{links=await this.io.runLinks();s.lastCorrelationError=null;}catch{s.correlationFailures++;s.lastCorrelationError='job-correlation-unavailable';}
+    for(const r of rows){if(Date.parse(r.updated_at||r.created_at)<now-LOOKBACK)continue;const correlation=links[String(r.id)]||{};const event=workflowEvent(repo,r,now,correlation);if(!event)continue;if(!s.runsSeen[event.key]){event.event.eventId=await stableId(event.key);entries.push(event);observed.push(event.key);}if(r.status!=='completed'||!numericId(r.run_attempt))continue;const item={repo,id:String(r.id),attempt:String(r.run_attempt),...correlation,commit:event.event.correlation.commit,updatedAt:r.updated_at,failed:r.conclusion==='failure'||r.conclusion==='timed_out'};if(!s.seen[key(item)]&&!s.pending.some(p=>key(p)===key(item)))s.pending.push(item);}
     const pendingBefore=s.pending.length;s.pending=s.pending.filter(x=>Date.parse(x.updatedAt)>=now-2*DAY);s.expiredDetails+=pendingBefore-s.pending.length;s.pending.sort((a,b)=>Number(b.failed)-Number(a.failed)||Date.parse(b.updatedAt)-Date.parse(a.updatedAt));if(s.pending.length>MAX_PENDING){s.truncated+=s.pending.length-MAX_PENDING;s.pending=s.pending.slice(0,MAX_PENDING);} }
    // Commit discovered runs independently of optional job details. A single
    // denied/malformed detail response must not block the repository cursor.
@@ -72,7 +74,7 @@ export class WorkflowCollector{
    // auth/rate errors respect provider backoff for all collection.
    let item=s.pending.find(x=>!x.retryAt||x.retryAt<=now),detail=null,detailError=null;
    if(item){try{s.lastStage='job-details';const d=await get(this.io.route(item.repo)+`/actions/runs/${item.id}/attempts/${item.attempt}/jobs?per_page=20`);detail=await jobDetailEvents(item,d,now);
-    const records=detail.entries.slice();if(detail.truncated){const event=createEvent('github-actions','job',{eventId:await stableId(`truncated:${key(item)}`),kind:'snapshot',provenance:'provider',severity:'warning',coverage:'truncated',outcome:'unknown',correlation:{repo:item.repo,workflowRunId:item.id,runAttempt:item.attempt},metrics:{count:detail.entries.length}},now);records.push({event,key:`run:${key(item)}:truncated`});}
+    const records=detail.entries.slice();if(detail.truncated){const event=createEvent('github-actions','job',{eventId:await stableId(`truncated:${key(item)}`),kind:'snapshot',provenance:'provider',severity:'warning',coverage:'truncated',outcome:'unknown',correlation:{repo:item.repo,workflowRunId:item.id,runAttempt:item.attempt,jobId:item.jobId,attemptId:item.attemptId},metrics:{count:detail.entries.length}},now);records.push({event,key:`run:${key(item)}:truncated`});}
     s.lastStage='enqueue-details';if(records.length&&!await this.io.enqueue(cap,records))throw Error('archive-backpressure');s.enqueued+=records.length;
     s.pending=s.pending.filter(x=>key(x)!==key(item));s.seen[key(item)]=now;s.details++;s.lastDetail=now;s.lastDetailedRun={repo:item.repo,id:item.id,attempt:item.attempt,records:records.length,truncated:detail.truncated};s.lastDetailError=null;if(detail.truncated)s.truncated++;
    }catch(e){detailError=e;s.detailFailures++;s.lastDetailError=failureCode(e);s.lastStatus=providerStatus(e);item.failures=(item.failures||0)+(e.message==='archive-backpressure'?0:1);
@@ -86,4 +88,4 @@ export class WorkflowCollector{
   await this.s.put(KEY,s);await this.arm(delay,now);return this.status();
  }
 }
-export function workflowIO(env,authority,queueStatus,enqueue){return {owner:env.GITHUB_OWNER,authority,queueStatus,enqueue,readToken:()=>readToken(env),get:gh,route:repo=>repoRoute(env,repo)};}
+export function workflowIO(env,authority,queueStatus,enqueue,runLinks){return {owner:env.GITHUB_OWNER,controller:env.CONTROLLER_REPO,authority,queueStatus,enqueue,runLinks,readToken:()=>readToken(env),get:gh,route:repo=>repoRoute(env,repo)};}

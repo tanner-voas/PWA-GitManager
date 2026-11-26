@@ -62,14 +62,14 @@ export class TelemetryOutbox{
   m.observations=Object.fromEntries(Object.entries(m.observations).sort((a,b)=>b[1].at-a[1].at).slice(0,200));
   await this.s.put(KEY,m);await this.arm(m);return this.status();
  }
- async drain({manual=false,now=Date.now()}={}){
+ async drain({manual=false,preservePending=false,now=Date.now()}={}){
   let m=await this.state();if(!m.capability||!m.queue.length)return this.status();
   if(manual&&m.lastManual&&now-m.lastManual<FIRST)return this.status();if(manual)m.lastManual=now;
-  const stale=m.queue.filter(e=>Date.parse(e.occurredAt)<now-TTL&&Date.parse(e.observedAt||e.occurredAt)<now-TTL);m.dropped+=stale.length;m.queue=m.queue.filter(e=>!stale.includes(e));
+  const stale=preservePending?[]:m.queue.filter(e=>Date.parse(e.occurredAt)<now-TTL&&Date.parse(e.observedAt||e.occurredAt)<now-TTL);m.dropped+=stale.length;m.queue=m.queue.filter(e=>!stale.includes(e));
   if(!m.queue.length){await this.s.put(KEY,m);await this.s.deleteAlarm?.();return this.status();}
   const batch=m.queue.slice(0,BATCH);let r;try{r=await this.profiles.telemetryAppend(m.capability,batch);}catch{}
   if(r&&Number.isInteger(r.accepted)&&Number.isInteger(r.duplicates)&&r.accepted>=0&&r.duplicates>=0&&r.accepted+r.duplicates===batch.length&&!r.rejected){m.queue.splice(0,batch.length);m.sent+=batch.length;m.failures=0;m.lastError=null;m.lastSent=now;m.lastAcknowledgement={at:stamp(now),count:batch.length,accepted:r.accepted,duplicates:r.duplicates,sources:[...new Set(batch.map(e=>e.source))].sort(),runs:[...new Set(batch.filter(e=>e.correlation?.workflowRunId).map(e=>`${e.correlation.repo||'unknown'}:${e.correlation.workflowRunId}`))].sort()};}
-  else if(r?.error==='Telemetry capability revoked'||r?.error==='Telemetry capability expired or invalid'){m.dropped+=m.queue.length;m.queue=[];m.capability=null;m.lastError='authorization-revoked';m.failures++;m.observations={};}
+  else if(!preservePending&&(r?.error==='Telemetry capability revoked'||r?.error==='Telemetry capability expired or invalid')){m.dropped+=m.queue.length;m.queue=[];m.capability=null;m.lastError='authorization-revoked';m.failures++;m.observations={};}
   else{m.failures++;m.lastError='sink-unavailable-or-full';}
   await this.s.put(KEY,m);await this.s.deleteAlarm?.();await this.arm(m,m.failures?Math.min(15*FIRST,FIRST*2**Math.min(m.failures,4)):FIRST);return this.status();
  }
