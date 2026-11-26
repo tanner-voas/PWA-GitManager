@@ -29,3 +29,30 @@ test('cancel refuses issued write credentials',async()=>{const c=coordinator();a
 test('retention removes old completed jobs but never active or unresolved jobs',async()=>{const c=coordinator();const old=new Date(Date.now()-40*86400000).toISOString();await c.s.put('job:'+id,{id,createdAt:old,updatedAt:old,status:'completed'});await c.s.put('job:'+id2,{id:id2,createdAt:old,updatedAt:old,status:'paused'});await c.s.put('active',id2);const kept=await c.history();assert.deepEqual(kept.map(j=>j.id),[id2]);assert.equal(await c.s.get('job:'+id),undefined);});
 
 test('blocked immediate export does not leave an orphan draft',async()=>{const c=coordinator();await draft(c,id);await req(c,`/jobs/${id}/start`);const r=await req(c,'/jobs',{id:id2,mode:'export',plan:{title:'Export',updates:[]},exportSpec:{repositories:['Core'],format:'bundle'},start:true});assert.equal(r.status,409);assert.equal(await c.s.get('job:'+id2),undefined);});
+
+// Repeated repositories are ordered steps, never independent alternatives.
+test('successive repository entries require a continuous version chain and Direct mode',()=>{
+ const second={...sample.updates[0],repository:'core',fromVersion:'1.2.4',toVersion:'1.2.5',patch:'core-second.patch'};
+ const p={...sample,updates:[...sample.updates,second]};
+ assert.deepEqual(normalizePlan(p,repos,'direct').updates.map(u=>[u.repository,u.fromVersion,u.toVersion]),[['Core','1.2.3','1.2.4'],['App','0.9.19','0.9.20'],['Core','1.2.4','1.2.5']]);
+ for(const mode of ['dry','pr'])assert.throws(()=>normalizePlan(p,repos,mode),/Direct mode/);
+ for(const u of [{...second,fromVersion:'1.2.5',toVersion:'1.2.6'},{...second,fromVersion:'1.2.3',toVersion:'1.2.4'}])assert.throws(()=>normalizePlan({...p,updates:[...sample.updates,u]},repos),/continuous version chain/);
+ assert.throws(()=>normalizePlan({...p,updates:[...sample.updates,{...second,dependsOn:['Core']}]},repos),/itself/);
+ assert.doesNotThrow(()=>normalizePlan(sample,repos,'pr'));
+});
+test('interleaved repeated repo steps publish independently and settle once at the end',async()=>{
+ const c=coordinator();const plan=normalizePlan({...sample,updates:[...sample.updates,{...sample.updates[0],fromVersion:'1.2.4',toVersion:'1.2.5',patch:'core-second.patch'}]},repos,'direct');
+ await req(c,'/jobs',{id,mode:'direct',plan,sha256:'4'.repeat(64),filename:'chain.zip'});
+ let j=(await req(c,`/jobs/${id}/start`)).data;const commits=['5'.repeat(40),'6'.repeat(40),'7'.repeat(40)];
+ for(let i=0;i<3;i++){
+  assert.equal(j.index,i);const claim=await runner(c,j,'claim');assert.equal(claim.status,200);assert.equal(claim.data.update.toVersion,plan.updates[i].toVersion);assert.deepEqual(claim.data.records.map(r=>r.commit),commits.slice(0,i));
+  assert.equal((await runner(c,j,'candidate',{base:i===2?commits[0]:base,commit:commits[i],tree,version:plan.updates[i].toVersion})).status,200);
+  assert.equal((await runner(c,j,'token',{write:true,commit:commits[i]})).status,200);
+  assert.equal((await runner(c,j,'published',{state:'published',commit:commits[i]})).status,200);
+  assert.equal((await runner(c,j,'published',{state:'published',commit:commits[i]})).status,409);
+  const previous=j;j=(await runner(c,j,'finish',{state:'success'})).data;
+  assert.equal((await runner(c,previous,'finish',{state:'success'})).status,409);
+ }
+ assert.deepEqual(j.records.map(r=>[r.index,r.repository,r.version,r.commit]),[[0,'Core','1.2.4',commits[0]],[1,'App','0.9.20',commits[1]],[2,'Core','1.2.5',commits[2]]]);
+ assert.equal(j.attempt.kind,'settle');await runner(c,j,'claim');j=(await runner(c,j,'finish',{state:'success'})).data;assert.equal(j.status,'completed');assert.equal(j.index,3);
+});
