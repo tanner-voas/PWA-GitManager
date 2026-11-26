@@ -9,6 +9,7 @@ import {workerRequestEvent} from './worker-telemetry.js';
 import {CaptureLifecycle} from './capture-lifecycle.js';
 import {recordDownload} from './download-diagnostics.js';
 import {createEvent} from './telemetry-schema.js';
+import {cachedProviderUsage} from './provider-usage.js';
 import {measuredR2} from './r2-telemetry.js';
 const PREFIX='/_git/v1', RUN='/_git-runner/v1';
 const originOK=(env,url)=>String(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim()).includes(url.origin);
@@ -45,6 +46,13 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
  if(!p.startsWith(PREFIX+'/'))return await env.ASSETS.fetch(req);
  if(!await identity(req,env))return fail('Connect the authorized Google account to use Git Manager',401);
  const path=p.slice(PREFIX.length);
+ if(path==='/usage/providers'&&req.method==='GET'){
+  const usage=e=>e.JOBS.get(e.JOBS.idFromName('workspace-provider-usage-v1'));
+  const profileCookie=captureSession(req,url).cookie,cached=url.searchParams.get('cached')==='1';
+  const [provider,drive]=await Promise.allSettled([Promise.resolve().then(()=>usage(env).fetch(new Request('https://internal/usage/providers'+(cached?'?cached=1':'')))),Promise.resolve().then(()=>env.PROFILES.telemetrySession(url.origin,profileCookie,cached?'storage-quota-cached':'storage-quota'))]);
+  let snapshot=null;try{if(provider.status==='fulfilled'&&provider.value.ok)snapshot=await provider.value.json();}catch{}
+  return json({snapshot,drive:drive.status==='fulfilled'&&!drive.value?.error?drive.value:null});
+ }
  if(path==='/telemetry/lifecycle'&&(req.method==='GET'||req.method==='POST')){
   if(req.method==='POST'&&(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked))return fail('Administrator unlock and same-origin CSRF header required',403);
   const action=req.method==='GET'?'status':(await req.json()).action;if(!['status','enable','disable','flush'].includes(action))return fail('Invalid telemetry control');
@@ -212,6 +220,7 @@ export class JobCoordinator {
   return kept;
  }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
+  if(path==='/usage/providers'&&method==='GET')return json(await cachedProviderUsage(this.s,this.env,Date.now(),undefined,new URL(req.url).searchParams.get('cached')==='1'));
   if(path.startsWith('/capture/')&&method==='POST'){if(path!=='/capture/status')await this.s.put('telemetry:capture-mode',true);const {session,id}=await req.json();return json(await this.captureLifecycle().request(path.split('/').at(-1),session,id));}
   if(path.startsWith('/workflow-poller/')){const poll=this.workflowPoller();if(path==='/workflow-poller/status'&&method==='GET')return json(await poll.status());if(method!=='POST')return fail('Method not allowed',405);if(path==='/workflow-poller/paused-status')return json(await poll.pausedStatus((await req.json()).ownerHash));await this.s.put('telemetry:workflow-poller-mode',true);if(path==='/workflow-poller/ensure')return json(await poll.ensure(await req.json()));if(path==='/workflow-poller/scan')return json(await poll.scanNow());if(path==='/workflow-poller/stop')return json(await poll.stop(await req.json()));return fail('Unknown poller operation',404);}
   // Internal-only collector endpoints; the public route table never forwards these.
