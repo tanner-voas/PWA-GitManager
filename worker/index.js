@@ -36,6 +36,13 @@ export default {async fetch(req,env,ctx){try{const url=new URL(req.url),p=url.pa
  if(!p.startsWith(PREFIX+'/'))return await env.ASSETS.fetch(req);
  if(!await identity(req,env))return fail('Connect the authorized Google account to use Git Manager',401);
  const path=p.slice(PREFIX.length);
+ if(path==='/telemetry/query'&&req.method==='POST'){
+  if(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked)return fail('Administrator unlock and same-origin CSRF header required',403);
+  try{const text=await req.text();if(text.length>4096)return fail('Invalid telemetry query',400);const q=JSON.parse(text);if(!q||typeof q!=='object'||Array.isArray(q))return fail('Invalid telemetry query',400);
+   const profileCookie=(req.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('__Host-pwa_profile_session='))||'';
+   const data=await env.PROFILES.telemetrySession(url.origin,profileCookie,'query',q);if(!data||data.error||!Array.isArray(data.events))return fail('Archive query unavailable. Check Profiles deployment and Google connection.',503);return json(data);
+  }catch{return fail('Archive query unavailable or invalid',503);}
+ }
  if(path==='/telemetry/status'&&req.method==='GET'||['/telemetry/enable','/telemetry/disable','/telemetry/flush','/telemetry/poll','/telemetry/probe'].includes(path)&&req.method==='POST'){
   const action=path.split('/').at(-1);if(action!=='status'&&(!sameOrigin(req)||!(await adminStatus(req,env)).unlocked))return fail('Administrator unlock and same-origin CSRF header required',403);
   try{const profileCookie=(req.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('__Host-pwa_profile_session='))||'';

@@ -60,3 +60,5 @@ test('unattended scan links controller workflow and details to durable workspace
 test('missing historical job links do not stop ordinary unattended discovery',async()=>{
  const x=setup();x.io.controller='PWA-GitRunner';x.io.runLinks=async()=>{throw Error('unavailable');};await x.poll.ensure({now});const status=await x.poll.tick(now+60000);assert.equal(status.correlationFailures,1);assert.equal(status.scans,1);assert.equal(x.events.length,4);
 });
+
+test('R6 backlog accelerates bounded ticks and prioritizes correlated runs',async()=>{const x=setup(),get=x.io.get,jobId=crypto.randomUUID();x.io.controller='PWA-GitRunner';x.io.runLinks=async()=>({'111':{jobId}});x.io.get=async(t,p)=>p.includes('/actions/runs?')?{total_count:20,workflow_runs:Array.from({length:20},(_,i)=>({...run,id:100+i,conclusion:i===11?'success':'failure'}))}:get(t,p);const st=await x.poll.scanNow(now);assert.equal(st.pendingDetails,19);assert.equal(st.lastDetailedRun.id,'111');assert.equal(st.catchupTicks,1);assert.equal(x.s.alarm,now+120000);assert.equal(st.pendingOverflow,0);assert.equal(st.details,1);});
