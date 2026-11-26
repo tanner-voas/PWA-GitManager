@@ -42,6 +42,7 @@ export class WorkflowCollector{
  }
  async state(){return {...fresh(),...await this.s.get(KEY)};}
  async status(){const s=await this.state();if(s.pausedAt&&!s.enabled)return {enabled:false,paused:true,nextPoll:null};const {authorityHash,ownerHash,repos,pending,seen,runsSeen,...publicState}=s;return {...publicState,repositoryCount:repos.length,pendingDetails:pending.length,nextPoll:await this.s.getAlarm?.()??null,nextManual:s.lastManual?s.lastManual+MANUAL:null};}
+ async pausedStatus(ownerHash,now=Date.now()){const s=await this.state();const base={enabled:false,paused:false,nextPoll:null};if(s.enabled||!s.pausedAt||!s.ownerHash||ownerHash!==s.ownerHash||now-s.pausedAt>2*DAY)return base;return {...base,paused:true,pausedAt:s.pausedAt,expiresAt:s.pausedAt+2*DAY,pendingDetails:s.pending.length,cursor:s.cursor,scans:s.scans,details:s.details,resumes:s.resumes,retryAt:s.retryAt};}
  async arm(delay,now=Date.now()){await this.s.setAlarm(now+delay);}
  async bind(s,cap){const identity=enrollmentIdentity(cap),hash=await hex(identity||cap),owner=ownerIdentity(cap),ownerHash=owner?await hex(owner):null;
   const same=s.authorityHash===hash||s.authorityHash===await hex(cap)||(ownerHash&&s.ownerHash===ownerHash);
