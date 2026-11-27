@@ -59,3 +59,5 @@ body:has(.gm) #app.app-frame{padding-inline:0;padding-bottom:0;width:min(100%,90
 
 /* Initial modal focus is on the heading, not the first expandable row. */
 .gm #gm-review-title:focus{outline:none}
+/* Compact account allowances; details are opt-in. */
+.gm-usage-card h3{margin-top:0}.gm-usage-meter{margin:.8rem 0}.gm-usage-meter .gm-line{border-bottom:0;padding:.25rem 0}.gm-usage-meter progress{width:100%;height:.65rem;margin:.25rem 0}.gm-usage-meter small,.gm-usage-card small{display:block}.gm-usage-details{margin-top:.75rem;border-top:1px solid var(--border,#c9d5d7);padding-top:.65rem}.gm-usage-details summary{cursor:pointer;font-weight:600}.gm-usage-details .gm-line span{overflow-wrap:anywhere;min-width:0}.gm-usage-card .gm-line strong{overflow-wrap:anywhere;text-align:right}

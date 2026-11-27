@@ -1,6 +1,6 @@
 {
   "name":"pwa-git-api", "main":"worker/index.js", "compatibility_date":"2026-11-24",
-  "workers_dev":true,"preview_urls":false,
+  "keep_vars":true,"workers_dev":true,"preview_urls":false,
   "assets":{"directory":"./dist/standalone","binding":"ASSETS","run_worker_first":true},
   "vars":{"GITHUB_OWNER":"tanner-voas","CONTROLLER_REPO":"PWA-GitRunner","CONTROLLER_REF":"main","ALLOWED_ORIGINS":"https://applauncher.tannervoas.workers.dev,https://pwa-git-api.tannervoas.workers.dev"},
   "services":[{"binding":"PROFILES","service":"pwa-profiles-api"}],

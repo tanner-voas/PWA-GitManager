@@ -443,3 +443,6 @@ R9 live acceptance: four updates published, ten-repository export completed; use
 
 ## R11 — provider usage visibility
 See R11_USAGE.md for the implementation/evidence ledger, optional least-privilege analytics setup and outstanding provider billing/quota work. Advances TEL-07, TEL-08, TEL-11, TEL-14, TEL-16, QA-01. No permanent IDs removed or fully closed. Preserve the simplified Telemetry page and separate observed versus provider-reported values.
+
+### R12 (TEL-06–11, TEL-14, TEL-16, QA-01)
+Provider and profile scope split, keyless Google collector, optional billing probes, and per-profile regular usage snapshots; see R12_USAGE.md for supported measurements and outstanding live acceptance. Permanent roadmap IDs unchanged.

@@ -1,3 +1,4 @@
+import {googleUsageStatus,requestGoogleUsage,acceptGoogleUsage} from './google-usage.js';
 import pkg from '../package.json' with {type:'json'};
 import {adminStatus,unlockAdmin,lockCookie,sameOrigin} from './admin.js';
 import {MAX_UPLOAD,normalizePlan,json,fail,digest,constantEqual,SHA,REPO,pathOK} from './protocol.js';
@@ -42,10 +43,12 @@ async function repositoryView(req,env,url,path,ctx){const t=await readToken(env)
 }
 async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.url),p=url.pathname;
  if(p.startsWith('/_profiles/'))return await env.PROFILES.fetch(req);
+ if(p===RUN+'/usage-monitor'&&req.method==='POST'){if(!runnerOK(req,env))return fail('Runner unauthorized',401);const raw=await req.text();if(raw.length>64000)return fail('Usage report too large',413);return env.JOBS.get(env.JOBS.idFromName('workspace-provider-usage-v1')).fetch(new Request('https://internal/usage/google-result',{method:'POST',body:raw}));}
  if(p.startsWith(RUN+'/')){if(!runnerOK(req,env))return fail('Runner unauthorized',401);const m=new RegExp('^'+RUN+'/([0-9a-f-]{36})/([0-9a-f-]{36})/(claim|package|token|candidate|published|progress|finish)$').exec(p);if(!m)return fail('Unknown runner route',404);const [,id,attempt,op]=m;const data=req.method==='POST'?await req.json():{};const check=await internal(env,`/runner/${id}/${attempt}/${op}`,req.method,data);if(check.ok&&req.method==='POST'&&['claim','candidate','published','finish'].includes(op)){measurement.path='/runner/'+id+'/'+op;measurement.jobId=id;}if(!check.ok||op!=='package'&&op!=='token')return check;const assignment=await check.json();if(op==='package'){const object=await measuredR2(env.PACKAGES,'read',[id+'/upload'],event=>observe(ctx,env,[{...event,correlation:{...event.correlation,attemptId:attempt}}]));return object?new Response(object.body,{headers:{'Content-Type':'application/octet-stream','Cache-Control':'no-store'}}):fail('Package expired',404);}const perms=data.write?{contents:'write',pull_requests:'write',workflows:'write',metadata:'read'}:{contents:'read',actions:'read',pull_requests:'read',metadata:'read'};return json({token:await token(env,perms,data.write?[assignment.repository]:undefined)});}
  if(!p.startsWith(PREFIX+'/'))return await env.ASSETS.fetch(req);
  if(!await identity(req,env))return fail('Connect the authorized Google account to use Git Manager',401);
  const path=p.slice(PREFIX.length);
+ if(path==='/usage/google-refresh'&&req.method==='POST'){if(!sameOrigin(req))return fail('Same-origin CSRF required',403);return env.JOBS.get(env.JOBS.idFromName('workspace-provider-usage-v1')).fetch(new Request('https://internal/usage/google-refresh',{method:'POST'}));}
  if(path==='/usage/providers'&&req.method==='GET'){
   const usage=e=>e.JOBS.get(e.JOBS.idFromName('workspace-provider-usage-v1'));
   const profileCookie=captureSession(req,url).cookie,cached=url.searchParams.get('cached')==='1';
@@ -220,7 +223,9 @@ export class JobCoordinator {
   return kept;
  }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
-  if(path==='/usage/providers'&&method==='GET')return json(await cachedProviderUsage(this.s,this.env,Date.now(),undefined,new URL(req.url).searchParams.get('cached')==='1'));
+  if(path==='/usage/providers'&&method==='GET'){const snapshot=await cachedProviderUsage(this.s,this.env,Date.now(),undefined,new URL(req.url).searchParams.get('cached')==='1');const google=await googleUsageStatus(this.s);return json(snapshot?{...snapshot,google}:google.report?{google}:null);}
+  if(path==='/usage/google-refresh'&&method==='POST')return json(await requestGoogleUsage(this.s,this.env));
+  if(path==='/usage/google-result'&&method==='POST'){try{return await acceptGoogleUsage(this.s,await req.json())?json({accepted:true}):fail('Stale usage report',409);}catch{return fail('Invalid usage report',400);}}
   if(path.startsWith('/capture/')&&method==='POST'){if(path!=='/capture/status')await this.s.put('telemetry:capture-mode',true);const {session,id}=await req.json();return json(await this.captureLifecycle().request(path.split('/').at(-1),session,id));}
   if(path.startsWith('/workflow-poller/')){const poll=this.workflowPoller();if(path==='/workflow-poller/status'&&method==='GET')return json(await poll.status());if(method!=='POST')return fail('Method not allowed',405);if(path==='/workflow-poller/paused-status')return json(await poll.pausedStatus((await req.json()).ownerHash));await this.s.put('telemetry:workflow-poller-mode',true);if(path==='/workflow-poller/ensure')return json(await poll.ensure(await req.json()));if(path==='/workflow-poller/scan')return json(await poll.scanNow());if(path==='/workflow-poller/stop')return json(await poll.stop(await req.json()));return fail('Unknown poller operation',404);}
   // Internal-only collector endpoints; the public route table never forwards these.
