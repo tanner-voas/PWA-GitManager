@@ -446,3 +446,6 @@ See R11_USAGE.md for the implementation/evidence ledger, optional least-privileg
 
 ### R12 (TEL-06–11, TEL-14, TEL-16, QA-01)
 Provider and profile scope split, keyless Google collector, optional billing probes, and per-profile regular usage snapshots; see R12_USAGE.md for supported measurements and outstanding live acceptance. Permanent roadmap IDs unchanged.
+
+### R13 — Usage refresh and reliability
+See R13_USAGE.md. R12 screenshots confirm direct analytics and storage readings; billing/Azure/Google and profile live acceptance remain open. R13 adds refresh feedback, bounded fresh reads, profile synchronization retries and status, independent provider diagnostic states, R2 storage estimates and additional DO measurements. No projections or additional permissions. Preserve all 32 original IDs. Proposed additional IDs: JOB-07 (R14 initial publication to an empty remote), DOC-01 (R15 private architecture repository, credential names only), DOC-02 (R16 documentation maintenance/recovery and final QA). Do not implement those future releases here.

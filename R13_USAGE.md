@@ -1,0 +1,21 @@
+# R13 — Usage refresh and provider reliability
+
+## R12 live evidence (2026-11-27)
+GitManager 0.1.24 screenshots show GitHub App 233/5000 requests, Workers 339 daily requests, 11,380 monthly requests, 18,534.39 CPU ms, R2 73 Class A and 169 Class B operations, 747.3 KiB observed account storage, 537 Durable Object requests, and Drive 10.248/15 GiB. GitHub/Cloudflare billing and Azure readings are unavailable; Google collection is pending. HSK3 and Default have no measured profile counters. Screenshots alone cannot establish whether new usage occurred or whether counters were lost. No post-R12 workspace archive or raw provider responses supplied.
+
+## Implementation
+- Explicit Usage refresh displays a busy overlay and checked-at timestamp; requests fresh direct readings subject to a 60-second minimum interval (normal cache 15 minutes). A refresh checks the available providers, not a guarantee that all metrics succeeded. Google retains separate six-hour success cooldown and bounded pending retry.
+- Profile counter flush debounce 2 seconds, coalesced flush, bounded retry while visible, visibility/page lifecycle flush, accepted-acknowledgement requirement, explicit sync state and pending count. Local-only and other-account observations remain isolated. Blank profiles get a concise no-measurements message. Existing monthly account estimates are separate and not retroactively attributed. No new Ciyan or Core patch.
+- Google collector uses the existing GitRunner descriptive User-Agent convention; sanitized failure stage from OIDC through measurement. This addresses a plausible Cloudflare callback rejection, not a confirmed live root cause.
+- Azure metric queries use resource namespace and daily totals, with independent metric failures. GitHub personal billing detail/summary and plan reference are read-only probes; missing items do not imply zero. No inferred included allowance balance.
+- Cloudflare R2 daily bucket peak approximation of month-to-date GB-months (decimal GB, 30-day divisor), separate storage classes, coverage days shown. Missing days suppress the allowance meter; peak observations are not invoices and missing buckets or sampling may affect estimates. Durable Objects daily duration, SQLite rows read/written and observed storage peak; peak is not account-wide storage. Free plan references are not verified plan limits. Restricted billing endpoints and Observability ingestion/retention remain unavailable unless provider returns supported data. No additional credential scopes, paid services or billing changes.
+- No forecasts, warning automation or complex analytics added.
+
+## Acceptance
+Apply in Direct mode; open Usage and refresh. Confirm busy indication, new or reused timestamp, Google workflow state and independent availability of provider readings. Generate fresh translation and uncached cloud speech on HSK3, then different activity on Default, with regular mode active; return to Usage and refresh. Compare counters, verify cloud sync, reopen and check backup persistence. Share ordinary telemetry export and a lightweight current repository export. If Google fails, use the workflow stage and sanitized diagnostics. Check provider dashboards against reported metrics. No new secrets required. Actual live endpoint and profile behavior remain to be verified.
+
+## Roadmap
+Preserve all original 32 permanent IDs; R13 advances TEL-06–11, TEL-14–16 and QA-01. R14 JOB-07 initial publication to empty remote, R15 DOC-01 private architecture inventory (names only, never secret values), R16 DOC-02 and final acceptance. Remaining exact R2 billing, Observability, DO account storage, GitHub included balance and trial credits subject to provider compatibility and existing authorization. User prefers present consumption, not projections. See revised post-R12 roadmap for task-level ledger.
+
+## Source baseline
+Reconstructed R12 from actual R10 export and published update packages; no post-R12 export. Manifest uses last verified ancestor commits with exact R12 source-version gates, not local reconstructed commit IDs. Replay validates against reconstructed trees, not against live main. Automatic Drive dependency reconciliation remains owned by workspace automation.

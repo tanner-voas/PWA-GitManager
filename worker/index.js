@@ -51,8 +51,8 @@ async function handleRequest(req,env,ctx,measurement){try{const url=new URL(req.
  if(path==='/usage/google-refresh'&&req.method==='POST'){if(!sameOrigin(req))return fail('Same-origin CSRF required',403);return env.JOBS.get(env.JOBS.idFromName('workspace-provider-usage-v1')).fetch(new Request('https://internal/usage/google-refresh',{method:'POST'}));}
  if(path==='/usage/providers'&&req.method==='GET'){
   const usage=e=>e.JOBS.get(e.JOBS.idFromName('workspace-provider-usage-v1'));
-  const profileCookie=captureSession(req,url).cookie,cached=url.searchParams.get('cached')==='1';
-  const [provider,drive]=await Promise.allSettled([Promise.resolve().then(()=>usage(env).fetch(new Request('https://internal/usage/providers'+(cached?'?cached=1':'')))),Promise.resolve().then(()=>env.PROFILES.telemetrySession(url.origin,profileCookie,cached?'storage-quota-cached':'storage-quota'))]);
+  const profileCookie=captureSession(req,url).cookie,cached=url.searchParams.get('cached')==='1',force=!cached&&url.searchParams.get('refresh')==='1';
+  const [provider,drive]=await Promise.allSettled([Promise.resolve().then(()=>usage(env).fetch(new Request('https://internal/usage/providers'+(cached?'?cached=1':force?'?refresh=1':'')))),Promise.resolve().then(()=>env.PROFILES.telemetrySession(url.origin,profileCookie,cached?'storage-quota-cached':force?'storage-quota-refresh':'storage-quota'))]);
   let snapshot=null;try{if(provider.status==='fulfilled'&&provider.value.ok)snapshot=await provider.value.json();}catch{}
   return json({snapshot,drive:drive.status==='fulfilled'&&!drive.value?.error?drive.value:null});
  }
@@ -223,7 +223,7 @@ export class JobCoordinator {
   return kept;
  }
  async route(req){const path=new URL(req.url).pathname,method=req.method;
-  if(path==='/usage/providers'&&method==='GET'){const snapshot=await cachedProviderUsage(this.s,this.env,Date.now(),undefined,new URL(req.url).searchParams.get('cached')==='1');const google=await googleUsageStatus(this.s);return json(snapshot?{...snapshot,google}:google.report?{google}:null);}
+  if(path==='/usage/providers'&&method==='GET'){const snapshot=await cachedProviderUsage(this.s,this.env,Date.now(),undefined,new URL(req.url).searchParams.get('cached')==='1',new URL(req.url).searchParams.get('refresh')==='1');const google=await googleUsageStatus(this.s);return json(snapshot?{...snapshot,google}:{google});}
   if(path==='/usage/google-refresh'&&method==='POST')return json(await requestGoogleUsage(this.s,this.env));
   if(path==='/usage/google-result'&&method==='POST'){try{return await acceptGoogleUsage(this.s,await req.json())?json({accepted:true}):fail('Stale usage report',409);}catch{return fail('Invalid usage report',400);}}
   if(path.startsWith('/capture/')&&method==='POST'){if(path!=='/capture/status')await this.s.put('telemetry:capture-mode',true);const {session,id}=await req.json();return json(await this.captureLifecycle().request(path.split('/').at(-1),session,id));}
