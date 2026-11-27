@@ -56,3 +56,18 @@ test('interleaved repeated repo steps publish independently and settle once at t
  assert.deepEqual(j.records.map(r=>[r.index,r.repository,r.version,r.commit]),[[0,'Core','1.2.4',commits[0]],[1,'App','0.9.20',commits[1]],[2,'Core','1.2.5',commits[2]]]);
  assert.equal(j.attempt.kind,'settle');await runner(c,j,'claim');j=(await runner(c,j,'finish',{state:'success'})).data;assert.equal(j.status,'completed');assert.equal(j.index,3);
 });
+
+const initial={repository:'Core',owner:'owner',repositoryId:123,private:true,policy:'documentation',kind:'bootstrap',branch:'main',toVersion:'0.1.0',commit:sha,tree,sha256:'4'.repeat(64),patch:'initial.bundle'};
+const initialPlan={schema:1,title:'Initial publication',updates:[initial]};
+test('bootstrap manifest is explicit, single-target, private, and independent of version increments',()=>{
+ const p=normalizePlan(initialPlan,repos);assert.equal(p.updates[0].baseCommit,null);assert.equal(p.updates[0].fromVersion,null);assert.equal(p.updates[0].commit,sha);assert.equal(p.updates[0].repositoryId,123);assert.doesNotThrow(()=>normalizePlan(initialPlan,repos,'dry'));
+ assert.throws(()=>normalizePlan(initialPlan,repos,'pr'),/Direct or Dry/);assert.throws(()=>normalizePlan({...initialPlan,updates:[initial,sample.updates[0]]},repos),/single repository/);
+ for(const change of [{private:false},{owner:''},{repositoryId:0},{commit:'short'},{tree:null},{sha256:null},{baseCommit:base},{fromVersion:'0.0.0'},{patch:'x.patch'},{policy:'executable'},{dependsOn:['App']},{submodulePins:{x:'App'}}])assert.throws(()=>normalizePlan({...initialPlan,updates:[{...initial,...change}]},repos),/Invalid initial publication/);
+});
+test('bootstrap coordinator binds exact commit/tree with null base and denies dry-run writes',async()=>{
+ for(const mode of ['direct','dry']){const c=coordinator();await req(c,'/jobs',{id,mode,plan:normalizePlan(initialPlan,repos,mode),sha256:'5'.repeat(64),filename:'initial.zip'});let j=(await req(c,`/jobs/${id}/start`)).data;await runner(c,j,'claim');
+ for(const bad of [{base,commit:sha,tree},{base:null,commit:base,tree},{base:null,commit:sha,tree:base}])assert.equal((await runner(c,j,'candidate',{...bad,version:'0.1.0'})).status,409);
+ assert.equal((await runner(c,j,'candidate',{base:null,commit:sha,tree,version:'0.1.0'})).status,200);
+ const token=await runner(c,j,'token',{write:true,commit:sha});assert.equal(token.status,mode==='dry'?403:200);if(mode==='direct'){assert.equal(token.data.bootstrap,true);assert.equal((await runner(c,j,'published',{state:'published',commit:sha})).status,200);}
+ j=(await runner(c,j,'finish',{state:'success'})).data;assert.equal(j.records[0].base,null);assert.equal(j.records[0].state,mode==='dry'?'validated':'published');if(mode==='direct'){await runner(c,j,'claim');j=(await runner(c,j,'finish',{state:'success'})).data;}assert.equal(j.status,'completed');}
+});
