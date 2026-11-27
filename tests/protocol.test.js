@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {nextVersion,normalizePlan,pathOK,constantEqual} from '../worker/protocol.js';import {privateKey,appJWT} from '../worker/github.js';import {generateKeyPairSync,verify} from 'node:crypto';import {JobCoordinator} from '../worker/index.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {bindInitialTarget,nextVersion,normalizePlan,pathOK,constantEqual} from '../worker/protocol.js';import {privateKey,appJWT} from '../worker/github.js';import {generateKeyPairSync,verify} from 'node:crypto';import {JobCoordinator} from '../worker/index.js';
 const repos=['Core','App','PWA-GitRunner'];const sample={schema:1,title:'test',updates:[{repository:'Core',fromVersion:'1.2.3',toVersion:'1.2.4',patch:'core.patch'},{repository:'App',fromVersion:'0.9.19',toVersion:'0.9.20',patch:'app.patch',dependsOn:['Core'],submodulePins:{'shared/core':'Core'}}]};
 test('only exactly one component can advance, and higher increments reset lower components',()=>{for(const v of ['1.2.4','1.3.0','2.0.0'])assert.equal(nextVersion('1.2.3',v),true);for(const v of ['1.2.3','1.2.5','1.3.1','1.4.0','2.2.0','3.0.0','01.2.4','1.2.4.r1','1.2','0.9.9'])assert.equal(nextVersion('1.2.3',v),false,v);});
 test('dependency order, installed repository scope and pin validation',()=>{assert.deepEqual(normalizePlan(sample,repos).updates[1].submodulePins,{'shared/core':'Core'});assert.throws(()=>normalizePlan({...sample,updates:sample.updates.toReversed()},repos),/earlier/);assert.throws(()=>normalizePlan({...sample,updates:[{...sample.updates[0],repository:'unknown'}]},repos),/not installed/);assert.throws(()=>normalizePlan({...sample,updates:[sample.updates[0],{...sample.updates[1],submodulePins:{'../core':'Core'}}]},repos),/Invalid submodule/);assert.equal(pathOK('.git/config'),false);assert.equal(constantEqual('foo','fo'),false);assert.equal(constantEqual('foo','foo'),true);});
@@ -70,4 +70,20 @@ test('bootstrap coordinator binds exact commit/tree with null base and denies dr
  assert.equal((await runner(c,j,'candidate',{base:null,commit:sha,tree,version:'0.1.0'})).status,200);
  const token=await runner(c,j,'token',{write:true,commit:sha});assert.equal(token.status,mode==='dry'?403:200);if(mode==='direct'){assert.equal(token.data.bootstrap,true);assert.equal((await runner(c,j,'published',{state:'published',commit:sha})).status,200);}
  j=(await runner(c,j,'finish',{state:'success'})).data;assert.equal(j.records[0].base,null);assert.equal(j.records[0].state,mode==='dry'?'validated':'published');if(mode==='direct'){await runner(c,j,'claim');j=(await runner(c,j,'finish',{state:'success'})).data;}assert.equal(j.status,'completed');}
+});
+
+
+test('portable bootstrap target resolves at review and explicit identity remains bound',()=>{
+ const target={name:'Core',id:123,owner:'owner',private:true,defaultBranch:'main',head:null};
+ for(const repositoryId of [undefined,null,0,123]){
+  const raw={...initialPlan,updates:[{...initial,repositoryId}]};
+  const bound=bindInitialTarget(raw,[target]);
+  assert.equal(normalizePlan(bound,repos).updates[0].repositoryId,123);
+  assert.equal(raw.updates[0].repositoryId,repositoryId);
+ }
+ for(const change of [{id:456},{owner:'other'},{private:false},{defaultBranch:'master'},{head:sha},{id:null}])assert.throws(()=>bindInitialTarget(initialPlan,[{...target,...change}]),/Initial publication|matching empty/);
+ assert.throws(()=>bindInitialTarget(initialPlan,[]),/matching empty/);
+ const reviewed=bindInitialTarget({...initialPlan,updates:[{...initial,repositoryId:0}]},[target]);
+ assert.throws(()=>bindInitialTarget(reviewed,[{...target,id:456}]),/identity changed/);
+ assert.deepEqual(bindInitialTarget(sample,[target]),sample);
 });

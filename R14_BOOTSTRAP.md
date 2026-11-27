@@ -1,6 +1,6 @@
 # R14 — Initial publication (JOB-07)
 
-Scope: explicit initial publication of initialized **private documentation** repositories, primarily the planned PWA-Architecture inventory. No repository is created by GitManager. No new provider permissions, GitHub App permission grants, or application deployment changes are required; include the remote in the existing installation if it uses selected repositories. R13 usage readings remain unchanged in this release. GitManager v0.1.26 and GitRunner v0.1.6 must both be deployed before using the new format.
+Scope: explicit initial publication of initialized **private documentation** repositories, primarily the planned PWA-Architecture inventory. No repository is created by GitManager. No new provider permissions, GitHub App permission grants, or application deployment changes are required; include the remote in the existing installation if it uses selected repositories. R13 usage readings remain unchanged in this release. GitManager v0.1.27 and GitRunner v0.1.6 support automatic repository identity resolution.
 
 ## User flow
 
@@ -15,7 +15,6 @@ Scope: explicit initial publication of initialized **private documentation** rep
   "updates": [{
     "repository": "PWA-Architecture",
     "owner": "YOUR_GITHUB_OWNER",
-    "repositoryId": 123456789,
     "private": true,
     "policy": "documentation",
     "kind": "bootstrap",
@@ -29,7 +28,7 @@ Scope: explicit initial publication of initialized **private documentation** rep
 }
 ```
 
-Repository numeric ID comes from GitHub repository metadata (also returned by the GitManager repo list API). `git rev-parse main` and `git rev-parse main^{tree}` give the commit/tree; SHA-256 is the digest of the bundle bytes. Do not invent an old version or base commit. R15 will supply the prepared bundle and manifest once the name/version and remote ID are known.
+GitManager resolves the numeric repository ID from installed GitHub metadata during review and checks it again when creating the draft. Omit repositoryId from portable manifests; legacy zero placeholders also work. An explicit nonzero ID must match and is never overwritten. The runner receives the resolved ID and independently verifies it before writing. `git rev-parse main` and `git rev-parse main^{tree}` give the commit/tree; SHA-256 is the digest of the bundle bytes. Do not invent an old version or base commit.
 
 4. Updates → select ZIP → Dry run or Direct mode → review exact repository identity, version, commit/tree and checksum → Create draft → Activity → Start approved job. Dry run validates but cannot get a write token. Direct publication atomically creates `refs/heads/main`, lightweight `vVERSION` and `vVERSION.r1` tags. The runner confirms all three point at the approved commit. No AppLauncher submodule or deployment is created. If uncertain, recover in Activity; the coordinator checks exact main and both tags and never overwrites a different commit.
 

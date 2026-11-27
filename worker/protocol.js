@@ -5,6 +5,18 @@ export const REPO=/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
 export const VERSION=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export function nextVersion(a,b){if(!VERSION.test(a)||!VERSION.test(b))return false;const [x,y,z]=a.split('.').map(BigInt),[i,j,k]=b.split('.').map(BigInt);return i===x&&j===y&&k===z+1n||i===x&&j===y+1n&&k===0n||i===x+1n&&j===0n&&k===0n;}
 export function pathOK(p){return typeof p==='string'&&p.length<=512&&!p.includes('\\')&&!/[\x00-\x1f]/.test(p)&&p.split('/').every(s=>s&&s!=='.'&&s!=='..'&&s.toLowerCase()!=='.git');}
+// Bind a portable initial-publication manifest to the installed remote. The
+// reviewed/stored plan retains the numeric ID; an explicit ID is never silently replaced.
+export function bindInitialTarget(plan,repos){
+ if(!Array.isArray(plan?.updates))return plan;
+ return {...plan,updates:plan.updates.map(u=>{
+  if(u?.kind!=='bootstrap')return u;
+  const r=repos.find(r=>typeof u.repository==='string'&&r.name.toLowerCase()===u.repository.toLowerCase());
+  if(!r||!Number.isSafeInteger(r.id)||r.id<=0||r.owner!==u.owner||r.private!==true||r.defaultBranch!=='main'||r.head)throw Error('Choose the matching empty private repository with default branch main. Refresh Repos if newly created.');
+  if(u.repositoryId!=null&&u.repositoryId!==0&&u.repositoryId!==r.id)throw Error('Initial publication target identity changed; refresh and review the package.');
+  return {...u,repository:r.name,repositoryId:r.id};
+ })};
+}
 export function normalizePlan(plan,allowed,mode='direct'){
  if(plan?.schema!==1||!Array.isArray(plan.updates)||!plan.updates.length||plan.updates.length>16)throw Error('Manifest schema 1: 1–16 updates required');
  const seen=new Map(), names=new Map(allowed.map(n=>[n.toLowerCase(),n]));
