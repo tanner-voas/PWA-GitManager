@@ -31,3 +31,7 @@ Base: deployed v0.1.27.r1, a2cf44c195b364288fb01538d937a1134fa71e6d, from the No
 - https://developers.cloudflare.com/durable-objects/observability/metrics-and-analytics/
 
 Tests use simulated API responses; no production provider credentials or live provider calls are used by the test suite.
+
+## R16A.1 — Workers transport compatibility (v0.1.29)
+
+The live v0.1.28 diagnostic export showed every external monitoring fetch returning `network`, while the App API, direct R2 listing and Drive worked. Cloudflare Workers does not implement Fetch `redirect: "error"`; it throws before the outbound request. Both monitoring HTTP paths now use `manual` and reject non-2xx responses, reporting 3xx as `redirect` with only status (never Location or body). No credential or scope change. Provider snapshot cache advances to v4 to force a fresh measurement; Google workflow cache remains intact. The shareable diagnostic feature is retained permanently. See https://developers.cloudflare.com/workers/runtime-apis/request/. Live provider authorization and data availability remain to be verified.

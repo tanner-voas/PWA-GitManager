@@ -15,3 +15,24 @@ test('Cloudflare GraphQL HTTP, query and permission failures are redacted and cl
 test('Cloudflare billing and storage failures do not affect available counters',async()=>{const result=await collectExtra({CF_USAGE_TOKEN:'hidden',CF_USAGE_ACCOUNT_ID:'a'.repeat(32)},now,{month,day,end},async(e,q,v,d)=>{if(d==='durableObjectsStorageGroups')throw httpFailure(403);if(d==='workersInvocationsAdaptive')return [{sum:{requests:2,cpuTimeUs:4}}];return [];},async()=>{throw httpFailure(404);});assert.equal(result.cfBilling.httpStatus,404);assert.equal(result.doStorage.httpStatus,403);assert.equal(result.workersMonth.value.requests,2);});
 test('R2 sample range identifies oldest and newest latest-per-bucket measurements',()=>{const r=(bucketName,datetime)=>({dimensions:{bucketName,datetime},max:{payloadSize:10,metadataSize:2}});const result=r2Storage([r('secret-bucket','2026-11-26T11:00:00Z'),r('secret-bucket','2026-11-27T11:00:00Z'),r('second','2026-11-27T09:00:00Z')]);assert.equal(result.oldestSample,Date.parse('2026-11-27T09:00:00Z'));assert.equal(result.newestSample,Date.parse('2026-11-27T11:00:00Z'));assert(!JSON.stringify(result).includes('secret-bucket'));});
 test('usage screen provides stage labels, refresh eligibility and cached-only diagnostics sharing',async()=>{const {readFileSync}=await import('node:fs');const src=readFileSync(new URL('../src/app.js',import.meta.url),'utf8');assert.match(src,/Detailed billing report/);assert.match(src,/Microsoft Entra authentication/);assert.match(src,/Next eligible refresh/);assert.match(src,/case 'usage-diagnostics-share':\{const readings=await call\('\/usage\/providers\?cached=1'\)/);});
+
+test('real monitoring transport uses Workers-supported manual mode and blocks redirects without forwarding credentials',async()=>{
+ const old=globalThis.fetch;const urls=[];
+ try{
+  globalThis.fetch=async(url,init)=>{urls.push(String(url));if(init.redirect!=='manual')throw new TypeError('Workers only supports follow or manual');return new Response('private body',{status:302,headers:{Location:'https://other.invalid/secret-location'}});};
+  const plan=await optional(d=>githubPlan(gh,undefined,d),now);
+  const billing=await optional(d=>githubUsage(gh,end,undefined,d),now);
+  const azure=await optional(d=>azureUsage(az,month,end,undefined,d),now);
+  const cf=await optional(()=>graphql({CF_USAGE_TOKEN:'hidden-token'},'query',{},'dataset'),now);
+  for(const r of [plan,billing,azure,cf]){assert.equal(r.code,'redirect');assert.equal(r.httpStatus,302);assert(!/secret-location|private body|hidden-token|hidden-secret/.test(JSON.stringify(r)));}
+  assert.equal(billing.diagnostics.billingReport.code,'redirect');assert.equal(azure.diagnostics.entraToken.code,'redirect');assert.equal(urls.length,5);assert(!urls.some(u=>u.includes('other.invalid')));
+ }finally{globalThis.fetch=old;}
+});
+test('monitoring transport works with a Workers-style fetch implementation on successful responses',async()=>{
+ const old=globalThis.fetch;
+ try{
+  globalThis.fetch=async(url,init)=>{if(init.redirect!=='manual')throw new TypeError('Workers only supports follow or manual');if(String(url).includes('api.github.com/user'))return Response.json({login:'owner',plan:{name:'free'}});return Response.json({data:{viewer:{accounts:[{dataset:[{sum:{requests:4}}]}]}}});};
+  const plan=await optional(d=>githubPlan(gh,undefined,d),now);assert.equal(plan.state,'available');assert.equal(plan.value.plan,'free');
+  const cf=await optional(()=>graphql({CF_USAGE_TOKEN:'hidden-token'},'query',{},'dataset'),now);assert.equal(cf.state,'available');assert.equal(cf.value[0].sum.requests,4);
+ }finally{globalThis.fetch=old;}
+});

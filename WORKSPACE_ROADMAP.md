@@ -455,3 +455,6 @@ Implemented locally and pending deployed acceptance: private documentation-only 
 
 ### R16A — provider diagnostics (v0.1.28)
 R15A/R15B live publication confirmed from exported workspace and screenshots. GitHub App and Cloudflare analytics working, Google keyless monitoring now returning real results, daily usage backup verified. Personal GitHub billing, Azure Monitor, CF billing/DO storage, and per-profile attribution remain incomplete. R16A adds independent bounded diagnostic stages and shareable cached provider snapshot; live acceptance pending. See R16A_PROVIDER_DIAGNOSTICS.md. R16B profile pipeline and Core pin review; R16C UI/operational acceptance; R16D architecture reference and roadmap closeout. No original roadmap IDs removed or renumbered.
+
+### R16A.1 — provider transport compatibility (v0.1.29)
+Live diagnostic export confirmed frontend/worker v0.1.28 and identified uniform network failures; corrected unsupported Workers redirect mode without following redirects. Preserve Share provider diagnostics as a permanent feature. Validate with fresh live readings before changing credentials. R16B/C/D scope unchanged.
