@@ -458,3 +458,6 @@ R15A/R15B live publication confirmed from exported workspace and screenshots. Gi
 
 ### R16A.1 — provider transport compatibility (v0.1.29)
 Live diagnostic export confirmed frontend/worker v0.1.28 and identified uniform network failures; corrected unsupported Workers redirect mode without following redirects. Preserve Share provider diagnostics as a permanent feature. Validate with fresh live readings before changing credentials. R16B/C/D scope unchanged.
+
+### R16B — profile usage reliability (v0.1.30)
+R16A.1 live provider transport accepted, GitHub billing and Azure metrics now available. Preserve provider diagnostics. R16B advances local observation/account isolation, bounded reconciliation, durable acknowledgement, hosted/standalone reporting and sanitized profile diagnostics; see R16B_PROFILE_USAGE.md. Live profile attribution remains to be verified. Core pin review completed; no explicit Core pin updates in this package. R16C/D and all permanent task IDs retained.
