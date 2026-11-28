@@ -452,3 +452,6 @@ See R13_USAGE.md. R12 screenshots confirm direct analytics and storage readings;
 
 ### R14 — JOB-07 initial publication
 Implemented locally and pending deployed acceptance: private documentation-only bootstrap bundle with exact target/commit/tree, full reachable main history, dry-run, scoped write, atomic initial main and version tags, bounded all-history validation and uncertain-publication recovery. R15 remains the architecture inventory and actual private initial publication. R16 retains live provider/profile checks and final closeout. See R14_BOOTSTRAP.md for the R13 live results and remaining limitations. No changes to the 32 original task identifiers or new documentation tasks.
+
+### R16A — provider diagnostics (v0.1.28)
+R15A/R15B live publication confirmed from exported workspace and screenshots. GitHub App and Cloudflare analytics working, Google keyless monitoring now returning real results, daily usage backup verified. Personal GitHub billing, Azure Monitor, CF billing/DO storage, and per-profile attribution remain incomplete. R16A adds independent bounded diagnostic stages and shareable cached provider snapshot; live acceptance pending. See R16A_PROVIDER_DIAGNOSTICS.md. R16B profile pipeline and Core pin review; R16C UI/operational acceptance; R16D architecture reference and roadmap closeout. No original roadmap IDs removed or renumbered.
